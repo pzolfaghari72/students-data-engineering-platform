@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "students-data-engineering-platform"
+version = "0.1.0"
+description = "Host utility dependencies for the Student Data Engineering Platform"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "python-dotenv>=1.0,<2.0",
+]
+
+[tool.setuptools]
+packages = []

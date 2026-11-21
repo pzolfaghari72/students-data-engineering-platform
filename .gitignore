@@ -1,0 +1,42 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python environments, bytecode, and test/tool caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+coverage.xml
+htmlcov/
+
+# Airflow runtime logs
+airflow/logs/
+
+# Spark and JVM runtime artifacts
+spark-warehouse/
+metastore_db/
+derby.log
+*.class
+hs_err_pid*.log
+*.hprof
+
+# Local build and temporary files
+build/
+dist/
+*.egg-info/
+*.log
+*.pid
+*.tmp
+*.swp
+*~
+
+# Operating system files
+.DS_Store
+Thumbs.db

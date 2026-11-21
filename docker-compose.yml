@@ -1,0 +1,697 @@
+# Project name with a default value.
+name: ${PROJECT_NAME:-students-data-engineering-platform}
+
+# Shared configuration for all Airflow services.
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: airflow/plugins/Dockerfile
+  image: students-platform-airflow:3.1.5-local
+  # Linux owner ID for files mounted into Airflow containers.
+  user: "1000:0"
+  restart: unless-stopped
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+  # Airflow runtime configuration and environment variables.
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+    # Fresh DAGs wait for an explicit trigger/unpause. Existing DAG states persist.
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "True"
+    AIRFLOW__CORE__PARALLELISM: 4
+    AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: 2
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+
+    # Container-to-container URL; this is not the host-published Airflow UI address.
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+
+    # Airflow encryption and authentication secrets.
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:?Set AIRFLOW__CORE__FERNET_KEY in .env}
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?Set AIRFLOW_JWT_SECRET in .env}
+    AIRFLOW__API__SECRET_KEY: ${AIRFLOW__API__SECRET_KEY:?Set AIRFLOW__API__SECRET_KEY in .env}
+
+    # Airflow metadata database connection.
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:?Set AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD:?Set AIRFLOW_DB_PASSWORD (URL-encode special characters)}@${POSTGRES_HOST:?Set POSTGRES_HOST}:${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}/${AIRFLOW_DB_NAME:?Set AIRFLOW_DB_NAME}
+
+    # Initial Airflow administrator credentials.
+    AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER:?Set AIRFLOW_ADMIN_USER}
+    AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:?Set AIRFLOW_ADMIN_PASSWORD}
+    AIRFLOW_ADMIN_EMAIL: ${AIRFLOW_ADMIN_EMAIL:?Set AIRFLOW_ADMIN_EMAIL}
+
+    # Source SQL Server connection
+    SOURCE_DB_HOST: ${SOURCE_DB_HOST:?Set SOURCE_DB_HOST}
+    SOURCE_DB_PORT: ${SOURCE_DB_PORT:?Set SOURCE_DB_PORT}
+    SOURCE_DB_NAME: ${SOURCE_DB_NAME:?Set SOURCE_DB_NAME}
+    SOURCE_DB_USER: ${SOURCE_DB_USER:?Set SOURCE_DB_USER}
+    SOURCE_DB_PASSWORD: ${SOURCE_DB_PASSWORD:?Set SOURCE_DB_PASSWORD}
+    SOURCE_DB_ODBC_DRIVER: ${SOURCE_DB_ODBC_DRIVER:?Set SOURCE_DB_ODBC_DRIVER}
+    SOURCE_DB_SCHEMA: ${SOURCE_DB_SCHEMA:?Set SOURCE_DB_SCHEMA}
+    SOURCE_DB_ENCRYPT: ${SOURCE_DB_ENCRYPT:?Set SOURCE_DB_ENCRYPT}
+    SOURCE_DB_TRUST_SERVER_CERTIFICATE: ${SOURCE_DB_TRUST_SERVER_CERTIFICATE:?Set SOURCE_DB_TRUST_SERVER_CERTIFICATE}
+    SOURCE_DB_CONNECTION_TIMEOUT: ${SOURCE_DB_CONNECTION_TIMEOUT:?Set SOURCE_DB_CONNECTION_TIMEOUT}
+    SOURCE_DB_SNAPSHOT_ISOLATION: ${SOURCE_DB_SNAPSHOT_ISOLATION:?Set SOURCE_DB_SNAPSHOT_ISOLATION}
+
+    # PostgreSQL staging connection used by the SQL Server extraction DAG.
+    STAGING_DB_HOST: ${POSTGRES_HOST:?Set POSTGRES_HOST}
+    STAGING_DB_PORT: ${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}
+    STAGING_DB_NAME: ${STAGING_DB_NAME:?Set STAGING_DB_NAME}
+    STAGING_DB_USER: ${STAGING_DB_USER:?Set STAGING_DB_USER}
+    STAGING_DB_PASSWORD: ${STAGING_DB_PASSWORD:?Set STAGING_DB_PASSWORD}
+
+    # JDBC settings for the Spark warehouse task executed by LocalExecutor.
+    STAGING_JDBC_URL: jdbc:postgresql://${POSTGRES_HOST:?Set POSTGRES_HOST}:${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}/${STAGING_DB_NAME:?Set STAGING_DB_NAME}
+    STAGING_JDBC_DRIVER: ${STAGING_JDBC_DRIVER:?Set STAGING_JDBC_DRIVER}
+    WAREHOUSE_JDBC_URL: jdbc:clickhouse:http://${CLICKHOUSE_HOST:?Set CLICKHOUSE_HOST}:${CLICKHOUSE_HTTP_PORT:?Set CLICKHOUSE_HTTP_PORT}/${WAREHOUSE_DB_NAME:?Set WAREHOUSE_DB_NAME}
+    WAREHOUSE_DB_USER: ${WAREHOUSE_DB_USER:?Set WAREHOUSE_DB_USER}
+    WAREHOUSE_DB_PASSWORD: ${WAREHOUSE_DB_PASSWORD:?Set WAREHOUSE_DB_PASSWORD}
+    WAREHOUSE_JDBC_DRIVER: ${WAREHOUSE_JDBC_DRIVER:?Set WAREHOUSE_JDBC_DRIVER}
+    STUDENT_ID_HMAC_KEY: ${STUDENT_ID_HMAC_KEY:?Set STUDENT_ID_HMAC_KEY}
+
+    # Debezium CDC stream consumed into history and SCD2.
+    KAFKA_BOOTSTRAP_SERVERS: "${KAFKA_HOST:?Set KAFKA_HOST}:${KAFKA_INTERNAL_PORT:?Set KAFKA_INTERNAL_PORT}"
+    DEBEZIUM_TOPIC_PREFIX: ${DEBEZIUM_TOPIC_PREFIX:?Set DEBEZIUM_TOPIC_PREFIX}
+    DEBEZIUM_CONNECTOR_NAME: ${DEBEZIUM_CONNECTOR_NAME:?Set DEBEZIUM_CONNECTOR_NAME}
+    CDC_MAX_RECORDS: ${CDC_MAX_RECORDS:?Set CDC_MAX_RECORDS}
+    CDC_MAX_SECONDS: ${CDC_MAX_SECONDS:?Set CDC_MAX_SECONDS}
+
+    # Container timezone.
+    TZ: ${TIMEZONE:-UTC}
+
+  # Shared directories for DAGs, logs, and custom plugins.
+  volumes: &airflow-volumes
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - ./airflow/plugins:/opt/airflow/plugins
+    - ./spark:/opt/spark-apps:ro
+
+  # Attach Airflow services to the internal platform network.
+  networks: [platform]
+
+
+services:
+  # PostgreSQL: Staging database and Airflow metadata database host.
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_BOOTSTRAP_DB:?Set POSTGRES_BOOTSTRAP_DB}
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:?Set POSTGRES_ADMIN_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?Set POSTGRES_ADMIN_PASSWORD}
+      POSTGRES_CONTAINER_PORT: ${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}
+      TZ: ${TIMEZONE:-UTC}
+    command: ["postgres", "-c", "port=${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}"]
+
+    # Expose PostgreSQL only on the local machine.
+    ports:
+      - "127.0.0.1:15433:${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}"
+
+    # Persist PostgreSQL data.
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+    # Check PostgreSQL connection readiness.
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -p "$$POSTGRES_CONTAINER_PORT" -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+    networks: [platform]
+
+
+  # Initialize application databases and dedicated database users.
+  postgres-init:
+    image: postgres:16-alpine
+    restart: "no"
+
+    # Wait until PostgreSQL is healthy before initialization.
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    environment:
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?Set POSTGRES_ADMIN_PASSWORD}
+      POSTGRES_HOST: ${POSTGRES_HOST:?Set POSTGRES_HOST}
+      POSTGRES_CONTAINER_PORT: ${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}
+      POSTGRES_ADMIN_USER: ${POSTGRES_ADMIN_USER:?Set POSTGRES_ADMIN_USER}
+      POSTGRES_BOOTSTRAP_DB: ${POSTGRES_BOOTSTRAP_DB:?Set POSTGRES_BOOTSTRAP_DB}
+      STAGING_DB_NAME: ${STAGING_DB_NAME:?Set STAGING_DB_NAME}
+      STAGING_DB_USER: ${STAGING_DB_USER:?Set STAGING_DB_USER}
+      STAGING_DB_PASSWORD: ${STAGING_DB_PASSWORD:?Set STAGING_DB_PASSWORD}
+      AIRFLOW_DB_NAME: ${AIRFLOW_DB_NAME:?Set AIRFLOW_DB_NAME}
+      AIRFLOW_DB_USER: ${AIRFLOW_DB_USER:?Set AIRFLOW_DB_USER}
+      AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD:?Set AIRFLOW_DB_PASSWORD}
+
+    # Execute the initialization script using the shell.
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        # Connect to the PostgreSQL bootstrap database.
+        psql -v ON_ERROR_STOP=1 -h "$$POSTGRES_HOST" -p "$$POSTGRES_CONTAINER_PORT" -U "$$POSTGRES_ADMIN_USER" -d "$$POSTGRES_BOOTSTRAP_DB" \
+          -v staging_user="$$STAGING_DB_USER" -v staging_password="$$STAGING_DB_PASSWORD" -v staging_db="$$STAGING_DB_NAME" \
+          -v airflow_user="$$AIRFLOW_DB_USER" -v airflow_password="$$AIRFLOW_DB_PASSWORD" -v airflow_db="$$AIRFLOW_DB_NAME" <<'SQL'
+
+        -- Create or update the dedicated staging database role.
+        SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'staging_user', :'staging_password')
+        WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'staging_user') \gexec
+        SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', :'staging_user', :'staging_password') \gexec
+
+        -- Create the staging database and assign ownership.
+        SELECT format('CREATE DATABASE %I OWNER %I', :'staging_db', :'staging_user')
+        WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'staging_db') \gexec
+        SELECT format('ALTER DATABASE %I OWNER TO %I', :'staging_db', :'staging_user') \gexec
+
+        -- Create or update the dedicated Airflow database role.
+        SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'airflow_user', :'airflow_password')
+        WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'airflow_user') \gexec
+        SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', :'airflow_user', :'airflow_password') \gexec
+
+        -- Create the Airflow metadata database and assign ownership.
+        SELECT format('CREATE DATABASE %I OWNER %I', :'airflow_db', :'airflow_user')
+        WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'airflow_db') \gexec
+        SELECT format('ALTER DATABASE %I OWNER TO %I', :'airflow_db', :'airflow_user') \gexec
+
+        SQL
+
+    networks: [platform]
+
+
+
+  # Create staging schemas after the database and role are ready.
+  staging-schema-init:
+    image: postgres:16-alpine
+    restart: "no"
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+
+    environment:
+      PGPASSWORD: ${STAGING_DB_PASSWORD:?Set STAGING_DB_PASSWORD}
+      STAGING_DB_HOST: ${POSTGRES_HOST:?Set POSTGRES_HOST}
+      STAGING_DB_PORT: ${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}
+      STAGING_DB_NAME: ${STAGING_DB_NAME:?Set STAGING_DB_NAME}
+      STAGING_DB_USER: ${STAGING_DB_USER:?Set STAGING_DB_USER}
+
+    volumes:
+      - ./db/staging_postgres/staging_ddl:/staging_ddl:ro
+
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        psql -v ON_ERROR_STOP=1 -h "$$STAGING_DB_HOST" -p "$$STAGING_DB_PORT" -U "$$STAGING_DB_USER" -d "$$STAGING_DB_NAME" \
+          -f /staging_ddl/metadata_schema.sql
+        psql -v ON_ERROR_STOP=1 -h "$$STAGING_DB_HOST" -p "$$STAGING_DB_PORT" -U "$$STAGING_DB_USER" -d "$$STAGING_DB_NAME" \
+          -f /staging_ddl/raw_tables.sql
+        psql -v ON_ERROR_STOP=1 -h "$$STAGING_DB_HOST" -p "$$STAGING_DB_PORT" -U "$$STAGING_DB_USER" -d "$$STAGING_DB_NAME" \
+          -f /staging_ddl/history_events.sql
+        psql -v ON_ERROR_STOP=1 -h "$$STAGING_DB_HOST" -p "$$STAGING_DB_PORT" -U "$$STAGING_DB_USER" -d "$$STAGING_DB_NAME" \
+          -f /staging_ddl/scd_schema.sql
+
+    networks: [platform]
+
+
+  # ClickHouse: Analytical data warehouse.
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    restart: unless-stopped
+    environment: &clickhouse-env
+      CLICKHOUSE_USER: ${CLICKHOUSE_ADMIN_USER:?Set CLICKHOUSE_ADMIN_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_ADMIN_PASSWORD:?Set CLICKHOUSE_ADMIN_PASSWORD}
+      CLICKHOUSE_ADMIN_USER: ${CLICKHOUSE_ADMIN_USER:?Set CLICKHOUSE_ADMIN_USER}
+      CLICKHOUSE_ADMIN_PASSWORD: ${CLICKHOUSE_ADMIN_PASSWORD:?Set CLICKHOUSE_ADMIN_PASSWORD}
+      CLICKHOUSE_DB: ${WAREHOUSE_DB_NAME:?Set WAREHOUSE_DB_NAME}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+      WAREHOUSE_DB_NAME: ${WAREHOUSE_DB_NAME:?Set WAREHOUSE_DB_NAME}
+      WAREHOUSE_DB_USER: ${WAREHOUSE_DB_USER:?Set WAREHOUSE_DB_USER}
+      WAREHOUSE_DB_PASSWORD: ${WAREHOUSE_DB_PASSWORD:?Set WAREHOUSE_DB_PASSWORD}
+      GRAFANA_DB_USER: ${GRAFANA_DB_USER:?Set GRAFANA_DB_USER}
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:?Set GRAFANA_DB_PASSWORD}
+      CLICKHOUSE_HTTP_PORT: ${CLICKHOUSE_HTTP_PORT:?Set CLICKHOUSE_HTTP_PORT}
+      CLICKHOUSE_NATIVE_PORT: ${CLICKHOUSE_NATIVE_PORT:?Set CLICKHOUSE_NATIVE_PORT}
+      TZ: ${TIMEZONE:-UTC}
+
+    # Expose HTTP and native client interfaces locally.
+    ports:
+      - "127.0.0.1:18123:${CLICKHOUSE_HTTP_PORT:?Set CLICKHOUSE_HTTP_PORT}"
+      - "127.0.0.1:19000:${CLICKHOUSE_NATIVE_PORT:?Set CLICKHOUSE_NATIVE_PORT}"
+
+    # Persist warehouse data and mount custom server configuration.
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./clickhouse/config:/etc/clickhouse-server/config.d:ro
+      - ./scripts/create_clickhouse_users.sh:/opt/clickhouse-setup/create_clickhouse_users.sh:ro
+
+    # Verify that ClickHouse can execute queries.
+    healthcheck:
+      test: [CMD-SHELL, 'clickhouse-client --port "$$CLICKHOUSE_NATIVE_PORT" --user "$$CLICKHOUSE_USER" --password "$$CLICKHOUSE_PASSWORD" --query "SELECT 1" >/dev/null']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+    networks: [platform]
+
+
+  # Apply warehouse DDL and users on both new and existing ClickHouse volumes.
+  # Reuses the project's existing setup script; it must support repeated runs.
+  clickhouse-init:
+    image: clickhouse/clickhouse-server:24.8
+    restart: "no"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment: *clickhouse-env
+    # Share only networking so the existing localhost-based setup script works.
+    # This client container does not mount ClickHouse's database volume.
+    network_mode: "service:clickhouse"
+    volumes:
+      - ./scripts/create_clickhouse_users.sh:/opt/clickhouse-setup/create_clickhouse_users.sh:ro
+      - ./db/warehouse_clickhouse:/warehouse_ddl:ro
+    entrypoint: ["/bin/bash", "-euc"]
+    command:
+      - |
+        for ddl in warehouse_ddl.sql cdc_warehouse_ddl.sql; do
+          test -f "/warehouse_ddl/$$ddl"
+          printf 'Applying %s\n' "$$ddl"
+          clickhouse-client \
+            --host 127.0.0.1 \
+            --port "$$CLICKHOUSE_NATIVE_PORT" \
+            --user "$$CLICKHOUSE_ADMIN_USER" \
+            --password "$$CLICKHOUSE_ADMIN_PASSWORD" \
+            --database "$$WAREHOUSE_DB_NAME" \
+            --multiquery < "/warehouse_ddl/$$ddl"
+        done
+        test -f /opt/clickhouse-setup/create_clickhouse_users.sh
+        bash -e /opt/clickhouse-setup/create_clickhouse_users.sh
+        printf 'ClickHouse schema and user initialization completed.\n'
+
+
+  # One-shot Spark batch job; keep behind the batch profile.
+  # Prefer postgres_to_clickhouse_warehouse in Airflow for routine batch loads.
+  spark-warehouse:
+    image: students-platform-spark:3.5.6
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
+    profiles: ["batch"]
+    restart: "no"
+    mem_limit: 1536m
+    cpus: 1.5
+    depends_on:
+      postgres:
+        condition: service_healthy
+      staging-schema-init:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+      clickhouse-init:
+        condition: service_completed_successfully
+    environment:
+      STAGING_JDBC_URL: jdbc:postgresql://${POSTGRES_HOST:?Set POSTGRES_HOST}:${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}/${STAGING_DB_NAME:?Set STAGING_DB_NAME}
+      STAGING_DB_USER: ${STAGING_DB_USER:?Set STAGING_DB_USER}
+      STAGING_DB_PASSWORD: ${STAGING_DB_PASSWORD:?Set STAGING_DB_PASSWORD}
+      STAGING_JDBC_DRIVER: ${STAGING_JDBC_DRIVER:?Set STAGING_JDBC_DRIVER}
+      WAREHOUSE_HOST: ${CLICKHOUSE_HOST:?Set CLICKHOUSE_HOST}
+      WAREHOUSE_HTTP_PORT: ${CLICKHOUSE_HTTP_PORT:?Set CLICKHOUSE_HTTP_PORT}
+      WAREHOUSE_JDBC_URL: jdbc:clickhouse:http://${CLICKHOUSE_HOST:?Set CLICKHOUSE_HOST}:${CLICKHOUSE_HTTP_PORT:?Set CLICKHOUSE_HTTP_PORT}/${WAREHOUSE_DB_NAME:?Set WAREHOUSE_DB_NAME}
+      WAREHOUSE_DB_USER: ${WAREHOUSE_DB_USER:?Set WAREHOUSE_DB_USER}
+      WAREHOUSE_DB_PASSWORD: ${WAREHOUSE_DB_PASSWORD:?Set WAREHOUSE_DB_PASSWORD}
+      WAREHOUSE_JDBC_DRIVER: ${WAREHOUSE_JDBC_DRIVER:?Set WAREHOUSE_JDBC_DRIVER}
+      STUDENT_ID_HMAC_KEY: ${STUDENT_ID_HMAC_KEY:?Set STUDENT_ID_HMAC_KEY}
+    volumes:
+      - ./spark:/opt/spark-apps:ro
+    entrypoint: ["/opt/spark/bin/spark-submit"]
+    command:
+      - "--py-files"
+      - "/opt/spark-apps/warehouse_keys.py"
+      - "--master"
+      - "local[2]"
+      - "--driver-memory"
+      - "768m"
+      - "--conf"
+      - "spark.jars.ivy=/tmp/.ivy2"
+      - "--conf"
+      - "spark.ui.showConsoleProgress=false"
+      - "--conf"
+      - "spark.sql.shuffle.partitions=2"
+      - "--packages"
+      - "org.postgresql:postgresql:42.7.5,com.clickhouse:clickhouse-jdbc-all:0.9.8"
+      - "/opt/spark-apps/load_warehouse.py"
+    networks: [platform]
+
+
+  # Kafka: Distributed event streaming and messaging platform.
+  kafka:
+    image: apache/kafka:3.9.1
+    restart: unless-stopped
+    stop_grace_period: 60s
+    mem_limit: 1024m
+    cpus: 1.0
+    environment:
+      # Unique Kafka cluster identifier.
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+
+      # Single-node KRaft configuration.
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+
+      # Persist broker records and KRaft metadata in the named volume.
+      # For an existing broker, preserve/migrate its old logs before recreation.
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+
+      # Internal, controller, and external network listeners.
+      KAFKA_LISTENERS: PLAINTEXT://:${KAFKA_INTERNAL_PORT:?Set KAFKA_INTERNAL_PORT},CONTROLLER://:${KAFKA_CONTROLLER_PORT:?Set KAFKA_CONTROLLER_PORT},EXTERNAL://:${KAFKA_EXTERNAL_PORT:?Set KAFKA_EXTERNAL_PORT}
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${KAFKA_HOST:?Set KAFKA_HOST}:${KAFKA_INTERNAL_PORT:?Set KAFKA_INTERNAL_PORT},EXTERNAL://${KAFKA_EXTERNAL_ADVERTISED_HOST:?Set KAFKA_EXTERNAL_ADVERTISED_HOST}:19094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+
+      # KRaft controller quorum configuration.
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@${KAFKA_HOST:?Set KAFKA_HOST}:${KAFKA_CONTROLLER_PORT:?Set KAFKA_CONTROLLER_PORT}
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+      # Replication settings for a single-node development cluster.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+
+      # Reduce consumer group startup delay.
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+
+      # Default partition count for newly created topics.
+      KAFKA_NUM_PARTITIONS: ${KAFKA_NUM_PARTITIONS:?Set KAFKA_NUM_PARTITIONS}
+      KAFKA_LOG_RETENTION_MS: ${KAFKA_TOPIC_RETENTION_MS:?Set KAFKA_TOPIC_RETENTION_MS}
+      KAFKA_HEAP_OPTS: ${KAFKA_HEAP_OPTS:?Set KAFKA_HEAP_OPTS}
+
+    # Expose the external Kafka listener locally.
+    ports:
+      - "127.0.0.1:19094:${KAFKA_EXTERNAL_PORT:?Set KAFKA_EXTERNAL_PORT}"
+
+    # Persist Kafka topics, logs, and metadata.
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+
+    # Check Kafka broker availability.
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:${KAFKA_INTERNAL_PORT} --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+
+    networks: [platform]
+
+
+  # Debezium Kafka Connect: Run connectors for CDC and data integration.
+  connect:
+    image: students-platform-connect:2.7.3
+    build:
+      context: ./debezium
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    mem_limit: 1536m
+    cpus: 1.0
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    # Start Kafka Connect only after Kafka becomes healthy.
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+    environment:
+      BOOTSTRAP_SERVERS: "${KAFKA_HOST:?Set KAFKA_HOST}:${KAFKA_INTERNAL_PORT:?Set KAFKA_INTERNAL_PORT}"
+      GROUP_ID: "1"
+
+      # Kafka topics used to store connector configurations, offsets, and status.
+      CONFIG_STORAGE_TOPIC: connect_configs
+      CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      OFFSET_STORAGE_TOPIC: connect_offsets
+      OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      STATUS_STORAGE_TOPIC: connect_statuses
+      STATUS_STORAGE_REPLICATION_FACTOR: "1"
+
+      # Kafka Connect REST API configuration.
+      # Debezium 2.7 entrypoint expects ADVERTISED_HOST_NAME / ADVERTISED_PORT.
+      ADVERTISED_HOST_NAME: ${CONNECT_HOST:?Set CONNECT_HOST}
+      ADVERTISED_PORT: ${CONNECT_INTERNAL_PORT:?Set CONNECT_INTERNAL_PORT}
+      REST_PORT: ${CONNECT_INTERNAL_PORT:?Set CONNECT_INTERNAL_PORT}
+      KAFKA_HEAP_OPTS: ${CONNECT_HEAP_OPTS:?Set CONNECT_HEAP_OPTS}
+      # Spark reads this endpoint to detect Debezium snapshot completion.
+      KAFKA_OPTS: "-javaagent:/opt/kafka/libs/jmx_prometheus_javaagent.jar=${CONNECT_METRICS_PORT:?Set CONNECT_METRICS_PORT}:/opt/kafka/config/jmx_exporter.yml"
+
+    # Expose the Kafka Connect REST API locally.
+    ports:
+      - "127.0.0.1:18083:${CONNECT_INTERNAL_PORT:?Set CONNECT_INTERNAL_PORT}"
+
+    # Worker REST readiness; connector tasks and snapshot readiness are separate.
+    # curl is supplied by the Debezium base image; retain it in the custom image.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'curl --noproxy "*" -fsS --max-time 5 "http://127.0.0.1:$$REST_PORT/connectors" >/dev/null'
+      interval: 10s
+      timeout: 6s
+      retries: 20
+      start_period: 30s
+
+    networks: [platform]
+
+  # Create/check the SQL Server connector; reuse the existing registration script.
+  # Success means connector readiness, not that its initial snapshot has finished.
+  debezium-register:
+    image: python:3.12-alpine
+    restart: "no"
+    depends_on:
+      connect:
+        condition: service_healthy
+    environment:
+      CONNECT_REST_URL: "http://${CONNECT_HOST:?Set CONNECT_HOST}:${CONNECT_INTERNAL_PORT:?Set CONNECT_INTERNAL_PORT}"
+      CONNECTOR_HEALTH_TIMEOUT_SECONDS: ${CONNECTOR_HEALTH_TIMEOUT_SECONDS:?Set CONNECTOR_HEALTH_TIMEOUT_SECONDS}
+      DEBEZIUM_CONNECTOR_NAME: ${DEBEZIUM_CONNECTOR_NAME:?Set DEBEZIUM_CONNECTOR_NAME}
+      DEBEZIUM_TOPIC_PREFIX: ${DEBEZIUM_TOPIC_PREFIX:?Set DEBEZIUM_TOPIC_PREFIX}
+      DEBEZIUM_SCHEMA_HISTORY_TOPIC: ${DEBEZIUM_SCHEMA_HISTORY_TOPIC:?Set DEBEZIUM_SCHEMA_HISTORY_TOPIC}
+      DEBEZIUM_SNAPSHOT_MODE: ${DEBEZIUM_SNAPSHOT_MODE:?Set DEBEZIUM_SNAPSHOT_MODE}
+      KAFKA_BOOTSTRAP_SERVERS: "${KAFKA_HOST:?Set KAFKA_HOST}:${KAFKA_INTERNAL_PORT:?Set KAFKA_INTERNAL_PORT}"
+      SOURCE_DB_HOST: ${SOURCE_DB_HOST:?Set SOURCE_DB_HOST}
+      SOURCE_DB_PORT: ${SOURCE_DB_PORT:?Set SOURCE_DB_PORT}
+      SOURCE_DB_NAME: ${SOURCE_DB_NAME:?Set SOURCE_DB_NAME}
+      SOURCE_DB_USER: ${SOURCE_DB_USER:?Set SOURCE_DB_USER}
+      SOURCE_DB_PASSWORD: ${SOURCE_DB_PASSWORD:?Set SOURCE_DB_PASSWORD}
+      SOURCE_DB_SCHEMA: ${SOURCE_DB_SCHEMA:?Set SOURCE_DB_SCHEMA}
+      SOURCE_DB_ENCRYPT: ${SOURCE_DB_ENCRYPT:?Set SOURCE_DB_ENCRYPT}
+      SOURCE_DB_TRUST_SERVER_CERTIFICATE: ${SOURCE_DB_TRUST_SERVER_CERTIFICATE:?Set SOURCE_DB_TRUST_SERVER_CERTIFICATE}
+      PYTHONPATH: /opt
+    volumes:
+      - ./debezium:/opt/debezium:ro
+      - ./airflow/dags/students_staging:/opt/students_staging:ro
+    command: ["python", "/opt/debezium/register_connector.py"]
+    networks: [platform]
+
+
+  # Opt-in continuous consumer. Before enabling this profile:
+  # - fix/verify Spark Python compatibility with students_staging.cdc_loader;
+  # - pause the Airflow CDC DAG and wait for its active task to finish;
+  # - reconcile old checkpoints with any rebuilt PostgreSQL/ClickHouse sinks.
+  # Registration completion is not initial snapshot completion.
+  spark-cdc-stream:
+    image: students-platform-spark:3.5.6
+    build:
+      context: ./spark
+      dockerfile: Dockerfile
+    profiles: ["streaming"]
+    restart: unless-stopped
+    stop_grace_period: 60s
+    mem_limit: 1536m
+    cpus: 1.5
+    depends_on:
+      postgres:
+        condition: service_healthy
+      staging-schema-init:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+      clickhouse-init:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
+      debezium-register:
+        condition: service_completed_successfully
+    environment:
+      PYTHONPATH: /opt/app
+      STREAMING_APP_NAME: ${STREAMING_APP_NAME:?Set STREAMING_APP_NAME}
+      STREAMING_QUERY_NAME: ${STREAMING_QUERY_NAME:?Set STREAMING_QUERY_NAME}
+      # This path must be under /opt/spark/checkpoints, the persistent mount.
+      STREAMING_CHECKPOINT_DIR: ${STREAMING_CHECKPOINT_DIR:?Set STREAMING_CHECKPOINT_DIR}
+      STREAMING_MAX_OFFSETS_PER_TRIGGER: ${STREAMING_MAX_OFFSETS_PER_TRIGGER:?Set STREAMING_MAX_OFFSETS_PER_TRIGGER}
+      KAFKA_BOOTSTRAP_SERVERS: "${KAFKA_HOST:?Set KAFKA_HOST}:${KAFKA_INTERNAL_PORT:?Set KAFKA_INTERNAL_PORT}"
+      DEBEZIUM_TOPIC_PREFIX: ${DEBEZIUM_TOPIC_PREFIX:?Set DEBEZIUM_TOPIC_PREFIX}
+      DEBEZIUM_CONNECTOR_NAME: ${DEBEZIUM_CONNECTOR_NAME:?Set DEBEZIUM_CONNECTOR_NAME}
+      # Used as a snapshot-completion gate, not as an observability service.
+      DEBEZIUM_METRICS_URL: "http://${CONNECT_HOST:?Set CONNECT_HOST}:${CONNECT_METRICS_PORT:?Set CONNECT_METRICS_PORT}/metrics"
+      SOURCE_DB_NAME: ${SOURCE_DB_NAME:?Set SOURCE_DB_NAME}
+      SOURCE_DB_SCHEMA: ${SOURCE_DB_SCHEMA:?Set SOURCE_DB_SCHEMA}
+      STAGING_DB_HOST: 15432:5432
+      STAGING_DB_PORT: ${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}
+      STAGING_DB_NAME: ${STAGING_DB_NAME:?Set STAGING_DB_NAME}
+      STAGING_DB_USER: ${STAGING_DB_USER:?Set STAGING_DB_USER}
+      STAGING_DB_PASSWORD: ${STAGING_DB_PASSWORD:?Set STAGING_DB_PASSWORD}
+      WAREHOUSE_HOST: ${CLICKHOUSE_HOST:?Set CLICKHOUSE_HOST}
+      WAREHOUSE_HTTP_PORT: ${CLICKHOUSE_HTTP_PORT:?Set CLICKHOUSE_HTTP_PORT}
+      WAREHOUSE_DB_NAME: ${WAREHOUSE_DB_NAME:?Set WAREHOUSE_DB_NAME}
+      WAREHOUSE_DB_USER: ${WAREHOUSE_DB_USER:?Set WAREHOUSE_DB_USER}
+      WAREHOUSE_DB_PASSWORD: ${WAREHOUSE_DB_PASSWORD:?Set WAREHOUSE_DB_PASSWORD}
+      WAREHOUSE_JDBC_DRIVER: ${WAREHOUSE_JDBC_DRIVER:?Set WAREHOUSE_JDBC_DRIVER}
+      WAREHOUSE_WRITE_BATCH_SIZE: ${WAREHOUSE_WRITE_BATCH_SIZE:?Set WAREHOUSE_WRITE_BATCH_SIZE}
+      STREAMING_KAFKA_GROUP_ID: ${STREAMING_KAFKA_GROUP_ID:?Set STREAMING_KAFKA_GROUP_ID}
+      TZ: ${TIMEZONE:?Set TIMEZONE}
+    volumes:
+      - ./spark:/opt/spark-apps:ro
+      - ./airflow/dags/students_staging:/opt/app/students_staging:ro
+      - spark-streaming-checkpoints:/opt/spark/checkpoints
+    entrypoint: ["/opt/spark/bin/spark-submit"]
+    command:
+      - "--master"
+      - "local[2]"
+      - "--driver-memory"
+      - "768m"
+      - "--conf"
+      - "spark.jars.ivy=/tmp/.ivy2"
+      - "--conf"
+      - "spark.ui.showConsoleProgress=false"
+      - "--conf"
+      - "spark.sql.shuffle.partitions=2"
+      - "--packages"
+      - "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.6,org.postgresql:postgresql:42.7.5,com.clickhouse:clickhouse-jdbc-all:0.9.8"
+      - "/opt/spark-apps/stream_cdc.py"
+    networks: [platform]
+
+
+  # Airflow initialization: Prepare metadata database and create the administrator.
+  airflow-init:
+    <<: *airflow-common
+    restart: "no"
+
+    # Wait until PostgreSQL roles and databases are initialized.
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+
+    command:
+      - bash
+      - -ec
+      - |
+        # Apply Airflow metadata database migrations.
+        airflow db migrate
+
+        # Create the administrator only if it does not already exist.
+        if airflow users list --output json | grep -Fq "\"$${AIRFLOW_ADMIN_USER}\""; then
+          echo 'Airflow administrator already exists'
+        else
+          airflow users create --username "$${AIRFLOW_ADMIN_USER}" --password "$${AIRFLOW_ADMIN_PASSWORD}" --firstname Platform --lastname Admin --role Admin --email "$${AIRFLOW_ADMIN_EMAIL}"
+        fi
+
+
+  # Airflow API server: Provide the Airflow web interface and API.
+  airflow-api-server:
+    <<: *airflow-common
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    command: api-server
+    ports:
+      - "127.0.0.1:18080:8080"
+    # Check API + database only. Requiring scheduler health here would create
+    # a startup cycle because the scheduler waits for this API.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import json, urllib.request;
+          data = json.load(urllib.request.urlopen('http://127.0.0.1:8080/api/v2/monitor/health', timeout=5));
+          raise SystemExit(0 if data.get('metadatabase', {}).get('status') == 'healthy' else 1)
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+
+
+  # Airflow scheduler: Schedule DAG runs and manage task execution.
+  airflow-scheduler:
+    <<: *airflow-common
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      staging-schema-init:
+        condition: service_completed_successfully
+      clickhouse-init:
+        condition: service_completed_successfully
+      airflow-api-server:
+        condition: service_healthy
+    mem_limit: 2g
+    cpus: 2.0
+    command: scheduler
+
+
+  # Airflow DAG processor: Parse DAG files and discover workflows.
+  airflow-dag-processor:
+    <<: *airflow-common
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    command: dag-processor
+
+
+  # Grafana: Business KPI dashboards backed by ClickHouse.
+  grafana:
+    image: students-platform-grafana:11.5.2
+    build:
+      context: ./grafana
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      clickhouse-init:
+        condition: service_completed_successfully
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:?Set GRAFANA_ADMIN_USER in .env}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_PATHS_PLUGINS: /usr/share/grafana/plugins
+      GRAFANA_DB_USER: ${GRAFANA_DB_USER:?Set GRAFANA_DB_USER in .env}
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:?Set GRAFANA_DB_PASSWORD in .env}
+      GRAFANA_DB_HOST: ${CLICKHOUSE_HOST:?Set CLICKHOUSE_HOST}
+      GRAFANA_DB_NATIVE_PORT: ${CLICKHOUSE_NATIVE_PORT:?Set CLICKHOUSE_NATIVE_PORT}
+      WAREHOUSE_DB_NAME: ${WAREHOUSE_DB_NAME:?Set WAREHOUSE_DB_NAME in .env}
+      TZ: ${TIMEZONE:-UTC}
+
+    # Expose Grafana only on the local machine.
+    ports:
+      - "127.0.0.1:13000:3000"
+
+    # Persist Grafana state and provision the ClickHouse data source/dashboard.
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+
+    networks: [platform]
+# Internal Docker bridge network for service-to-service communication.
+networks:
+  platform:
+    driver: bridge
+
+
+# Named volumes for persistent service data.
+volumes:
+  postgres-data:
+  clickhouse-data:
+  kafka-data:
+  grafana-data:
+  spark-streaming-checkpoints:

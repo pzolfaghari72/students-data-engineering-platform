@@ -1,0 +1,2164 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Eighteen data panels: nine KPI cards, six bar charts, an application-status donut, and two comparison tables. Uses the latest published ClickHouse warehouse views. Multi-select academic term and department filters; applications use entry term and all departments. Grade analytics show recorded-code coverage and credit-weighted grade points using the source include_in_gpa flag, non-null points, and positive credits. This is enrollment-attempt analytics, not an institutional cumulative GPA. Capacity ratios count enrollment records, not verified live occupancy. Snapshot analytics update after a successful warehouse load.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [
+    {
+      "title": "Reset filters",
+      "type": "link",
+      "icon": "undo",
+      "url": "/d/students-enrollment-kpis/student-enrollment-capacity?var-term=All&var-department=All",
+      "targetBlank": false,
+      "includeVars": false,
+      "keepTime": false,
+      "asDropdown": false,
+      "tags": [],
+      "tooltip": "Show all terms and departments"
+    }
+  ],
+  "panels": [
+    {
+      "id": 100,
+      "type": "text",
+      "title": "",
+      "description": "",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 3
+      },
+      "transparent": true,
+      "options": {
+        "mode": "markdown",
+        "content": "**Published warehouse snapshot** · Data updates after a successful warehouse load.\n\n**Scope:** Select terms and departments above. **Applications use entry term and all departments.** [Reset filters](/d/students-enrollment-kpis/student-enrollment-capacity?var-term=All&var-department=All) · Panel info icons explain each metric."
+      }
+    },
+    {
+      "id": 101,
+      "type": "row",
+      "title": "01  Overview · selected terms and departments",
+      "description": "",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 0,
+        "y": 3,
+        "w": 24,
+        "h": 1
+      },
+      "transparent": false,
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Enrollment records",
+      "description": "Course-enrollment records in the latest published warehouse snapshot. Both filters apply. This is a registration count, not a distinct student count, and it does not exclude withdrawn records because no status field was supplied.",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 4,
+        "h": 5
+      },
+      "transparent": false,
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-warehouse"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-warehouse"
+          },
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "SELECT count() AS value\nFROM fact_course_enrollment AS f\nWHERE $__conditionalAll(f.term_code IN (${term:singlequote}), $term)\n  AND $__conditionalAll(f.department_code IN (${department:singlequote}), $department)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#5794F2"
+          },
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "mappings": [],
+          "noValue": "—",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#5794F2",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^value$/",
+          "values": false
+        },
+        "text": {
+          "valueSize": 34
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Unique students",
+      "description": "Distinct pseudonymous student keys across the complete selected set of terms and departments. A student appearing in several selected terms or departments is counted once here. This counts students with enrollment records, not the entire student dimension.",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 4,
+        "y": 4,
+        "w": 4,
+        "h": 5
+      },
+      "transparent": false,
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-warehouse"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-warehouse"
+          },
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "SELECT uniqExact(f.student_key) AS value\nFROM fact_course_enrollment AS f\nWHERE $__conditionalAll(f.term_code IN (${term:singlequote}), $term)\n  AND $__conditionalAll(f.department_code IN (${department:singlequote}), $department)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#73BF69"
+          },
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "mappings": [],
+          "noValue": "—",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#73BF69",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^value$/",
+          "values": false
+        },
+        "text": {
+          "valueSize": 34
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Course offerings",
+      "description": "All course-offering records in the selected terms and departments, including offerings with no enrollments.",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 8,
+        "y": 4,
+        "w": 4,
+        "h": 5
+      },
+      "transparent": false,
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-warehouse"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-warehouse"
+          },
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "SELECT count() AS value\nFROM fact_course_offering AS o\nWHERE $__conditionalAll(o.term_code IN (${term:singlequote}), $term)\n  AND $__conditionalAll(o.department_code IN (${department:singlequote}), $department)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#B877D9"
+          },
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "mappings": [],
+          "noValue": "—",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#B877D9",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^value$/",
+          "values": false
+        },
+        "text": {
+          "valueSize": 34
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Offered seats",
+      "description": "Sum of capacity across all course offerings in the selected terms and departments. With several terms selected, capacity is summed across those terms; this is not a simultaneous campus capacity.",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 4,
+        "h": 5
+      },
+      "transparent": false,
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-warehouse"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-warehouse"
+          },
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "SELECT sum(o.capacity) AS value\nFROM fact_course_offering AS o\nWHERE $__conditionalAll(o.term_code IN (${term:singlequote}), $term)\n  AND $__conditionalAll(o.department_code IN (${department:singlequote}), $department)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#8AB8FF"
+          },
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "mappings": [],
+          "noValue": "—",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#8AB8FF",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^value$/",
+          "values": false
+        },
+        "text": {
+          "valueSize": 34
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Enrollment / capacity",
+      "description": "100 × enrollment records ÷ offered seats, using the same term and department filters on both facts. This is a record-based ratio, not verified live seat occupancy. Ratios of 100% or more are orange for review and are not capped. No capacity means the denominator is zero; the ratio is undefined.",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 16,
+        "y": 4,
+        "w": 4,
+        "h": 5
+      },
+      "transparent": false,
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-warehouse"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-warehouse"
+          },
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "SELECT 100.0 * e.enrollments / nullIf(o.seats, 0) AS value\nFROM (\n    SELECT count() AS enrollments\n    FROM fact_course_enrollment AS f\n    WHERE $__conditionalAll(f.term_code IN (${term:singlequote}), $term)\n  AND $__conditionalAll(f.department_code IN (${department:singlequote}), $department)\n) AS e\nCROSS JOIN (\n    SELECT sum(o.capacity) AS seats\n    FROM fact_course_offering AS o\n    WHERE $__conditionalAll(o.term_code IN (${term:singlequote}), $term)\n  AND $__conditionalAll(o.department_code IN (${department:singlequote}), $department)\n) AS o"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0,
+          "mappings": [],
+          "noValue": "No capacity",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#56D9CA",
+                "value": null
+              },
+              {
+                "color": "#FFB357",
+                "value": 100
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^value$/",
+          "values": false
+        },
+        "text": {
+          "valueSize": 34
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Applications · all departments",
+      "description": "Sum of application_count for the selected entry terms. The Department filter intentionally does not apply: no supported applicant-to-department mapping was provided. Application counts are not an acceptance or enrollment conversion rate.",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 20,
+        "y": 4,
+        "w": 4,
+        "h": 5
+      },
+      "transparent": false,
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-warehouse"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-warehouse"
+          },
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "SELECT sum(a.application_count) AS value\nFROM fact_application AS a\nWHERE $__conditionalAll(a.entry_term_code IN (${term:singlequote}), $term)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#FFB357"
+          },
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "mappings": [],
+          "noValue": "—",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#FFB357",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^value$/",
+          "values": false
+        },
+        "text": {
+          "valueSize": 34
+        }
+      }
+    },
+    {
+      "id": 102,
+      "type": "row",
+      "title": "02  Enrollment demand · academic terms and departments",
+      "description": "",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 24,
+        "h": 1
+      },
+      "transparent": false,
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 6,
+      "type": "barchart",
+      "title": "Enrollment by academic term",
+      "description": "Enrollment records by actual academic term code. Both filters apply. Terms are ordered by year and SP → SU → FA, without inventing calendar dates. Click a bar and choose the link to filter to that term. Only terms with matching enrollment records are shown.",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 0,
+        "y": 10,
+        "w": 14,
+        "h": 10
+      },
+      "transparent": false,
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-warehouse"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-warehouse"
+          },
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "WITH term_counts AS (\n    SELECT f.term_code AS term_code, count() AS enrollments\n    FROM fact_course_enrollment AS f\n    WHERE $__conditionalAll(f.term_code IN (${term:singlequote}), $term)\n  AND $__conditionalAll(f.department_code IN (${department:singlequote}), $department)\n    GROUP BY f.term_code\n)\nSELECT c.term_code AS `Term`, c.enrollments AS `Enrollments`\nFROM term_counts AS c\nLEFT ANY JOIN dim_term AS t ON t.term_code = c.term_code\nORDER BY coalesce(t.year, toUInt32OrZero(substring(c.term_code, 3, 4))),\n    multiIf(upper(coalesce(nullIf(t.session_code, ''), substring(c.term_code, 1, 2))) = 'SP', 1,\n            upper(coalesce(nullIf(t.session_code, ''), substring(c.term_code, 1, 2))) = 'SU', 2,\n            upper(coalesce(nullIf(t.session_code, ''), substring(c.term_code, 1, 2))) = 'FA', 3, 4),\n    c.term_code\nSETTINGS join_use_nulls = 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#5794F2"
+          },
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "mappings": [],
+          "noValue": "—",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#5794F2",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisGridShow": true,
+            "fillOpacity": 90,
+            "gradientMode": "none",
+            "lineWidth": 0,
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Enrollments"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Filter to this academic term",
+                    "url": "/d/students-enrollment-kpis/student-enrollment-capacity?var-term=${__data.fields[\"Term\"]:percentencode}&${department:queryparam}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "vertical",
+        "xField": "Term",
+        "groupWidth": 0.74,
+        "barWidth": 0.9,
+        "barRadius": 0.1,
+        "fullHighlight": true,
+        "showValue": "auto",
+        "stacking": "none",
+        "xTickLabelRotation": -45,
+        "xTickLabelSpacing": 0,
+        "xTickLabelMaxLength": 20,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none",
+          "hideZeros": false
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "barchart",
+      "title": "Enrollment by department",
+      "description": "Departments ranked by enrollment-record count within the selected terms and departments. Click a bar and choose the link to focus on that department while retaining the term selection.",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 14,
+        "y": 10,
+        "w": 10,
+        "h": 10
+      },
+      "transparent": false,
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-warehouse"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-warehouse"
+          },
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "SELECT f.department_code AS `Department`, count() AS `Enrollments`\nFROM fact_course_enrollment AS f\nWHERE $__conditionalAll(f.term_code IN (${term:singlequote}), $term)\n  AND $__conditionalAll(f.department_code IN (${department:singlequote}), $department)\nGROUP BY f.department_code\nORDER BY `Enrollments` DESC, `Department`"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#5794F2"
+          },
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "mappings": [],
+          "noValue": "—",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#5794F2",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisGridShow": true,
+            "fillOpacity": 90,
+            "gradientMode": "none",
+            "lineWidth": 0,
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Enrollments"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Filter to this department",
+                    "url": "/d/students-enrollment-kpis/student-enrollment-capacity?${term:queryparam}&var-department=${__data.fields[\"Department\"]:percentencode}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xField": "Department",
+        "groupWidth": 0.74,
+        "barWidth": 0.9,
+        "barRadius": 0.1,
+        "fullHighlight": true,
+        "showValue": "auto",
+        "stacking": "none",
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "xTickLabelMaxLength": 20,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none",
+          "hideZeros": false
+        }
+      }
+    },
+    {
+      "id": 103,
+      "type": "row",
+      "title": "03  Capacity and admissions · applications include all departments",
+      "description": "",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 24,
+        "h": 1
+      },
+      "transparent": false,
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 10,
+      "type": "barchart",
+      "title": "Enrollment / capacity by department",
+      "description": "Enrollment-record count divided by offered seats for each department. Both filters apply. Facts are aggregated separately to avoid multiplying seats. Departments represented in either fact are retained. Zero-capacity departments have an undefined ratio and no percentage bar; inspect the department table. Orange means at least 100%, not a configured alert.",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 8,
+        "h": 10
+      },
+      "transparent": false,
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-warehouse"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-warehouse"
+          },
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "WITH enrollment_totals AS (\n    SELECT\n        f.department_code AS department_code,\n        count() AS enrollments,\n        uniqExact(f.student_key) AS students\n    FROM fact_course_enrollment AS f\n    WHERE $__conditionalAll(f.term_code IN (${term:singlequote}), $term)\n  AND $__conditionalAll(f.department_code IN (${department:singlequote}), $department)\n    GROUP BY f.department_code\n), offering_totals AS (\n    SELECT\n        o.department_code AS department_code,\n        count() AS offerings,\n        sum(o.capacity) AS seats\n    FROM fact_course_offering AS o\n    WHERE $__conditionalAll(o.term_code IN (${term:singlequote}), $term)\n  AND $__conditionalAll(o.department_code IN (${department:singlequote}), $department)\n    GROUP BY o.department_code\n), combined AS (\n    SELECT department_code, enrollments, students,\n           toUInt64(0) AS offerings, toFloat64(0) AS seats\n    FROM enrollment_totals\n    UNION ALL\n    SELECT department_code, toUInt64(0) AS enrollments, toUInt64(0) AS students,\n           offerings, toFloat64(seats) AS seats\n    FROM offering_totals\n), department_summary AS (\n    SELECT department_code,\n           sum(enrollments) AS enrollments,\n           sum(students) AS students,\n           sum(offerings) AS offerings,\n           sum(seats) AS seats\n    FROM combined\n    GROUP BY department_code\n)\nSELECT department_code AS `Department`,\n       100.0 * enrollments / nullIf(seats, 0) AS `Capacity ratio`\nFROM department_summary\nORDER BY `Capacity ratio` DESC NULLS LAST, `Department`"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0,
+          "mappings": [],
+          "noValue": "No capacity",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#56D9CA",
+                "value": null
+              },
+              {
+                "color": "#FFB357",
+                "value": 100
+              }
+            ]
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisGridShow": true,
+            "fillOpacity": 90,
+            "gradientMode": "none",
+            "lineWidth": 0,
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            },
+            "axisSoftMax": 100
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Capacity ratio"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Filter to this department",
+                    "url": "/d/students-enrollment-kpis/student-enrollment-capacity?${term:queryparam}&var-department=${__data.fields[\"Department\"]:percentencode}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "xField": "Department",
+        "groupWidth": 0.74,
+        "barWidth": 0.9,
+        "barRadius": 0.1,
+        "fullHighlight": true,
+        "showValue": "auto",
+        "stacking": "none",
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "xTickLabelMaxLength": 20,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none",
+          "hideZeros": false
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "piechart",
+      "title": "Application status · all departments",
+      "description": "Share and count of applications by the recorded application_status. Academic term filters entry_term_code; Department does not apply. Unmatched or blank status values are retained as Unknown instead of dropping their applications.",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 8,
+        "y": 21,
+        "w": 8,
+        "h": 10
+      },
+      "transparent": false,
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-warehouse"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-warehouse"
+          },
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "SELECT coalesce(nullIf(trimBoth(d.application_status), ''), 'Unknown') AS `Status`,\n       sum(a.application_count) AS `Applications`\nFROM fact_application AS a\nLEFT ANY JOIN dim_applicant AS d ON d.applicant_key = a.applicant_key\nWHERE $__conditionalAll(a.entry_term_code IN (${term:singlequote}), $term)\nGROUP BY `Status`\nORDER BY `Applications` DESC, `Status`"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "short",
+          "decimals": 0,
+          "mappings": [],
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "pieType": "donut",
+        "displayLabels": [
+          "percent"
+        ],
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "values": [
+            "value",
+            "percent"
+          ]
+        },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^Applications$/",
+          "values": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "desc",
+          "hideZeros": false
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "barchart",
+      "title": "Applications by entry term · all departments",
+      "description": "Application count by entry term, in academic-term order. The academic term filter applies; the Department filter does not apply. Click a bar and choose the link to select that term. Only terms with matching applications are shown.",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 16,
+        "y": 21,
+        "w": 8,
+        "h": 10
+      },
+      "transparent": false,
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-warehouse"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-warehouse"
+          },
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "WITH term_counts AS (\n    SELECT a.entry_term_code AS term_code, sum(a.application_count) AS applications\n    FROM fact_application AS a\n    WHERE $__conditionalAll(a.entry_term_code IN (${term:singlequote}), $term)\n    GROUP BY a.entry_term_code\n)\nSELECT c.term_code AS `Term`, c.applications AS `Applications`\nFROM term_counts AS c\nLEFT ANY JOIN dim_term AS t ON t.term_code = c.term_code\nORDER BY coalesce(t.year, toUInt32OrZero(substring(c.term_code, 3, 4))),\n    multiIf(upper(coalesce(nullIf(t.session_code, ''), substring(c.term_code, 1, 2))) = 'SP', 1,\n            upper(coalesce(nullIf(t.session_code, ''), substring(c.term_code, 1, 2))) = 'SU', 2,\n            upper(coalesce(nullIf(t.session_code, ''), substring(c.term_code, 1, 2))) = 'FA', 3, 4),\n    c.term_code\nSETTINGS join_use_nulls = 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#FFB357"
+          },
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "mappings": [],
+          "noValue": "—",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#FFB357",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisGridShow": true,
+            "fillOpacity": 90,
+            "gradientMode": "none",
+            "lineWidth": 0,
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Applications"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Filter to this academic term",
+                    "url": "/d/students-enrollment-kpis/student-enrollment-capacity?var-term=${__data.fields[\"Term\"]:percentencode}&${department:queryparam}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "vertical",
+        "xField": "Term",
+        "groupWidth": 0.74,
+        "barWidth": 0.9,
+        "barRadius": 0.1,
+        "fullHighlight": true,
+        "showValue": "auto",
+        "stacking": "none",
+        "xTickLabelRotation": -45,
+        "xTickLabelSpacing": 0,
+        "xTickLabelMaxLength": 20,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none",
+          "hideZeros": false
+        }
+      }
+    },
+    {
+      "id": 104,
+      "type": "row",
+      "title": "04  Department detail · compare and drill into the selected scope",
+      "description": "",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 0,
+        "y": 31,
+        "w": 24,
+        "h": 1
+      },
+      "transparent": false,
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 12,
+      "type": "table",
+      "title": "Department comparison",
+      "description": "Both filters apply. Enrollment share is a percentage of all enrollment records in the current selection. Departments with only offerings or only enrollments remain visible. Unique students are distinct inside each department: summing this column would double-count students taking courses across departments, so the table has no totals footer. Click a department to filter the dashboard. No capacity denotes an undefined enrollment/capacity ratio.",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 10
+      },
+      "transparent": false,
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-warehouse"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-warehouse"
+          },
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "WITH enrollment_totals AS (\n    SELECT\n        f.department_code AS department_code,\n        count() AS enrollments,\n        uniqExact(f.student_key) AS students\n    FROM fact_course_enrollment AS f\n    WHERE $__conditionalAll(f.term_code IN (${term:singlequote}), $term)\n  AND $__conditionalAll(f.department_code IN (${department:singlequote}), $department)\n    GROUP BY f.department_code\n), offering_totals AS (\n    SELECT\n        o.department_code AS department_code,\n        count() AS offerings,\n        sum(o.capacity) AS seats\n    FROM fact_course_offering AS o\n    WHERE $__conditionalAll(o.term_code IN (${term:singlequote}), $term)\n  AND $__conditionalAll(o.department_code IN (${department:singlequote}), $department)\n    GROUP BY o.department_code\n), combined AS (\n    SELECT department_code, enrollments, students,\n           toUInt64(0) AS offerings, toFloat64(0) AS seats\n    FROM enrollment_totals\n    UNION ALL\n    SELECT department_code, toUInt64(0) AS enrollments, toUInt64(0) AS students,\n           offerings, toFloat64(seats) AS seats\n    FROM offering_totals\n), department_summary AS (\n    SELECT department_code,\n           sum(enrollments) AS enrollments,\n           sum(students) AS students,\n           sum(offerings) AS offerings,\n           sum(seats) AS seats\n    FROM combined\n    GROUP BY department_code\n)\nSELECT department_code AS `Department`,\n       enrollments AS `Enrollments`,\n       students AS `Unique students`,\n       offerings AS `Offerings`,\n       seats AS `Offered seats`,\n       100.0 * enrollments / nullIf(seats, 0) AS `Capacity ratio`,\n       100.0 * enrollments / nullIf(sum(enrollments) OVER (), 0) AS `Enrollment share`\nFROM department_summary\nORDER BY `Enrollments` DESC, `Department`"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "—",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#5794F2"
+          },
+          "custom": {
+            "align": "right",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Department"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "left"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Filter to this department",
+                    "url": "/d/students-enrollment-kpis/student-enrollment-capacity?${term:queryparam}&var-department=${__value.raw:percentencode}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Enrollments"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#5794F2"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Unique students"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 170
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Offerings"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 140
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Offered seats"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 160
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Capacity ratio"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "noValue",
+                "value": "No capacity"
+              },
+              {
+                "id": "custom.width",
+                "value": 180
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "#56D9CA",
+                      "value": null
+                    },
+                    {
+                      "color": "#FFB357",
+                      "value": 100
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Enrollment share"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 100
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#5794F2"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "showTypeIcons": false,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Enrollments",
+            "desc": true
+          }
+        ],
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      }
+    },
+    {
+      "id": 105,
+      "type": "row",
+      "title": "05  Grade analytics · recorded course-enrollment attempts",
+      "description": "Term and department filters apply. Grade coverage measures recorded codes. Credit-weighted points follow include_in_gpa and do not replace institutional GPA rules.",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 24,
+        "h": 1
+      },
+      "transparent": false,
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 13,
+      "type": "stat",
+      "title": "Grades recorded",
+      "description": "Enrollment attempts with a nonblank grade_code in the selected terms and departments. Recorded codes that are excluded from GPA still count here. This measures recorded grades, not passes or completed courses. Null and blank codes appear as Not recorded in the distribution and detail table.",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 0,
+        "y": 43,
+        "w": 8,
+        "h": 5
+      },
+      "transparent": false,
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-warehouse"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-warehouse"
+          },
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "WITH grade_source AS (\n    SELECT\n        f.term_code,\n        f.department_code,\n        f.student_key,\n        nullIf(trimBoth(ifNull(f.grade_code, '')), '') AS recorded_grade,\n        toFloat64(f.credits) AS credits,\n        toFloat64(f.grade_points) AS grade_points,\n        f.include_in_gpa\n    FROM fact_course_enrollment AS f\n    WHERE $__conditionalAll(f.term_code IN (${term:singlequote}), $term)\n      AND $__conditionalAll(f.department_code IN (${department:singlequote}), $department)\n), grade_scope AS (\n    SELECT *,\n        isNotNull(recorded_grade) AS has_grade,\n        (isNotNull(recorded_grade)\n         AND include_in_gpa = 1\n         AND isNotNull(grade_points)\n         AND credits > 0) AS eligible\n    FROM grade_source\n)\nSELECT countIf(has_grade) AS value FROM grade_scope"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#B877D9"
+          },
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "mappings": [],
+          "noValue": "—",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#5794F2",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^value$/",
+          "values": false
+        },
+        "text": {
+          "valueSize": 34
+        }
+      }
+    },
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "Grade coverage",
+      "description": "100 × enrollment attempts with a nonblank grade_code ÷ all selected enrollment attempts. Non-GPA codes count as recorded. No enrollments means the denominator is zero. This is recorded-code coverage, not a pass rate or course-completion rate.",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 8,
+        "y": 43,
+        "w": 8,
+        "h": 5
+      },
+      "transparent": false,
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-warehouse"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-warehouse"
+          },
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "WITH grade_source AS (\n    SELECT\n        f.term_code,\n        f.department_code,\n        f.student_key,\n        nullIf(trimBoth(ifNull(f.grade_code, '')), '') AS recorded_grade,\n        toFloat64(f.credits) AS credits,\n        toFloat64(f.grade_points) AS grade_points,\n        f.include_in_gpa\n    FROM fact_course_enrollment AS f\n    WHERE $__conditionalAll(f.term_code IN (${term:singlequote}), $term)\n      AND $__conditionalAll(f.department_code IN (${department:singlequote}), $department)\n), grade_scope AS (\n    SELECT *,\n        isNotNull(recorded_grade) AS has_grade,\n        (isNotNull(recorded_grade)\n         AND include_in_gpa = 1\n         AND isNotNull(grade_points)\n         AND credits > 0) AS eligible\n    FROM grade_source\n)\nSELECT 100.0 * countIf(has_grade) / nullIf(count(), 0) AS value FROM grade_scope"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#56D9CA"
+          },
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0,
+          "mappings": [],
+          "noValue": "No enrollments",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#5794F2",
+                "value": null
+              }
+            ]
+          },
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^value$/",
+          "values": false
+        },
+        "text": {
+          "valueSize": 34
+        }
+      }
+    },
+    {
+      "id": 15,
+      "type": "stat",
+      "title": "Credit-weighted grade points",
+      "description": "Sum(grade_points × credits) ÷ sum(credits), over attempts with a recorded grade, include_in_gpa = 1, non-null grade_points, and positive credits. Zero-point grades are included. No eligible credits means the weighted average is unavailable. Uses the source grade scale; no 4.0 cap or pass threshold is assumed. Repeated attempts remain included. This is a pooled enrollment average, not an official cumulative student GPA or an average of individual student GPAs.",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 16,
+        "y": 43,
+        "w": 8,
+        "h": 5
+      },
+      "transparent": false,
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-warehouse"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-warehouse"
+          },
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "WITH grade_source AS (\n    SELECT\n        f.term_code,\n        f.department_code,\n        f.student_key,\n        nullIf(trimBoth(ifNull(f.grade_code, '')), '') AS recorded_grade,\n        toFloat64(f.credits) AS credits,\n        toFloat64(f.grade_points) AS grade_points,\n        f.include_in_gpa\n    FROM fact_course_enrollment AS f\n    WHERE $__conditionalAll(f.term_code IN (${term:singlequote}), $term)\n      AND $__conditionalAll(f.department_code IN (${department:singlequote}), $department)\n), grade_scope AS (\n    SELECT *,\n        isNotNull(recorded_grade) AS has_grade,\n        (isNotNull(recorded_grade)\n         AND include_in_gpa = 1\n         AND isNotNull(grade_points)\n         AND credits > 0) AS eligible\n    FROM grade_source\n)\nSELECT sumIf(grade_points * credits, eligible)\n       / nullIf(sumIf(credits, eligible), 0) AS value FROM grade_scope"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#B877D9"
+          },
+          "unit": "none",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "No eligible credits",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#5794F2",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "textMode": "value",
+        "wideLayout": true,
+        "showPercentChange": false,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/^value$/",
+          "values": false
+        },
+        "text": {
+          "valueSize": 30
+        }
+      }
+    },
+    {
+      "id": 16,
+      "type": "barchart",
+      "title": "Grade distribution",
+      "description": "Enrollment-attempt counts for every actual recorded grade code in the selected terms and departments. Null and blank codes are retained as Not recorded, so these bars reconcile to Enrollment records. Recorded grades are ordered by their numeric points when available, followed by other codes; Not recorded is last. Codes are not reclassified into assumed pass/fail groups.",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 12,
+        "h": 10
+      },
+      "transparent": false,
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-warehouse"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-warehouse"
+          },
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "WITH grade_source AS (\n    SELECT\n        f.term_code,\n        f.department_code,\n        f.student_key,\n        nullIf(trimBoth(ifNull(f.grade_code, '')), '') AS recorded_grade,\n        toFloat64(f.credits) AS credits,\n        toFloat64(f.grade_points) AS grade_points,\n        f.include_in_gpa\n    FROM fact_course_enrollment AS f\n    WHERE $__conditionalAll(f.term_code IN (${term:singlequote}), $term)\n      AND $__conditionalAll(f.department_code IN (${department:singlequote}), $department)\n), grade_scope AS (\n    SELECT *,\n        isNotNull(recorded_grade) AS has_grade,\n        (isNotNull(recorded_grade)\n         AND include_in_gpa = 1\n         AND isNotNull(grade_points)\n         AND credits > 0) AS eligible\n    FROM grade_source\n)\nSELECT\n    coalesce(recorded_grade, 'Not recorded') AS `Grade`,\n    count() AS `Enrollments`\nFROM grade_scope\nGROUP BY recorded_grade\nORDER BY isNotNull(recorded_grade) DESC,\n         max(grade_points) DESC NULLS LAST,\n         `Grade`"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#B877D9"
+          },
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "mappings": [],
+          "noValue": "—",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#5794F2",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisGridShow": true,
+            "fillOpacity": 90,
+            "gradientMode": "none",
+            "lineWidth": 0,
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "vertical",
+        "xField": "Grade",
+        "groupWidth": 0.74,
+        "barWidth": 0.9,
+        "barRadius": 0.1,
+        "fullHighlight": true,
+        "showValue": "auto",
+        "stacking": "none",
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 0,
+        "xTickLabelMaxLength": 20,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none",
+          "hideZeros": false
+        }
+      }
+    },
+    {
+      "id": 17,
+      "type": "barchart",
+      "title": "Credit-weighted grade points by term",
+      "description": "The same eligible-credit weighted formula as the grade-points KPI, calculated separately per academic term. Both filters apply. Source grade-point values determine the scale; no 4.0 cap is imposed. A term with attempts but no eligible credits has an unavailable value, not a zero score. Zero remains a valid result for eligible zero-point grades. Click a bar to select its term.",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 12,
+        "y": 48,
+        "w": 12,
+        "h": 10
+      },
+      "transparent": false,
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-warehouse"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-warehouse"
+          },
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "WITH grade_source AS (\n    SELECT\n        f.term_code,\n        f.department_code,\n        f.student_key,\n        nullIf(trimBoth(ifNull(f.grade_code, '')), '') AS recorded_grade,\n        toFloat64(f.credits) AS credits,\n        toFloat64(f.grade_points) AS grade_points,\n        f.include_in_gpa\n    FROM fact_course_enrollment AS f\n    WHERE $__conditionalAll(f.term_code IN (${term:singlequote}), $term)\n      AND $__conditionalAll(f.department_code IN (${department:singlequote}), $department)\n), grade_scope AS (\n    SELECT *,\n        isNotNull(recorded_grade) AS has_grade,\n        (isNotNull(recorded_grade)\n         AND include_in_gpa = 1\n         AND isNotNull(grade_points)\n         AND credits > 0) AS eligible\n    FROM grade_source\n)\n, term_results AS (\n    SELECT term_code,\n           sumIf(grade_points * credits, eligible)\n       / nullIf(sumIf(credits, eligible), 0) AS weighted_points\n    FROM grade_scope\n    GROUP BY term_code\n)\nSELECT c.term_code AS `Term`, c.weighted_points AS `Weighted points`\nFROM term_results AS c\nLEFT ANY JOIN dim_term AS t ON t.term_code = c.term_code\nORDER BY coalesce(t.year, toUInt32OrZero(substring(c.term_code, 3, 4))),\n    multiIf(upper(coalesce(nullIf(t.session_code, ''), substring(c.term_code, 1, 2))) = 'SP', 1,\n            upper(coalesce(nullIf(t.session_code, ''), substring(c.term_code, 1, 2))) = 'SU', 2,\n            upper(coalesce(nullIf(t.session_code, ''), substring(c.term_code, 1, 2))) = 'FA', 3, 4),\n    c.term_code\nSETTINGS join_use_nulls = 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#B877D9"
+          },
+          "unit": "none",
+          "decimals": 2,
+          "mappings": [],
+          "noValue": "No eligible credits",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "#5794F2",
+                "value": null
+              }
+            ]
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "axisGridShow": true,
+            "fillOpacity": 90,
+            "gradientMode": "none",
+            "lineWidth": 0,
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Weighted points"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Filter to this academic term",
+                    "url": "/d/students-enrollment-kpis/student-enrollment-capacity?var-term=${__data.fields[\"Term\"]:percentencode}&${department:queryparam}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "vertical",
+        "xField": "Term",
+        "groupWidth": 0.74,
+        "barWidth": 0.9,
+        "barRadius": 0.1,
+        "fullHighlight": true,
+        "showValue": "auto",
+        "stacking": "none",
+        "xTickLabelRotation": -45,
+        "xTickLabelSpacing": 0,
+        "xTickLabelMaxLength": 20,
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none",
+          "hideZeros": false
+        }
+      }
+    },
+    {
+      "id": 18,
+      "type": "table",
+      "title": "Grade results by department",
+      "description": "Term and department filters apply. Each row is a department/grade combination. Grade share uses ALL selected enrollment attempts in that department, including Not recorded, so shares total 100% per department before table column filters. Eligible records and credits use the same inclusion rule as the weighted-points KPI. Unique students are distinct within each row and overlap across grades; totals are intentionally disabled. Table column filters narrow the displayed rows without recalculating their shares. Click a department to focus the dashboard on it.",
+      "pluginVersion": "11.5.2",
+      "gridPos": {
+        "x": 0,
+        "y": 58,
+        "w": 24,
+        "h": 12
+      },
+      "transparent": false,
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-warehouse"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-warehouse"
+          },
+          "refId": "A",
+          "editorType": "sql",
+          "queryType": "table",
+          "format": 1,
+          "rawSql": "WITH grade_source AS (\n    SELECT\n        f.term_code,\n        f.department_code,\n        f.student_key,\n        nullIf(trimBoth(ifNull(f.grade_code, '')), '') AS recorded_grade,\n        toFloat64(f.credits) AS credits,\n        toFloat64(f.grade_points) AS grade_points,\n        f.include_in_gpa\n    FROM fact_course_enrollment AS f\n    WHERE $__conditionalAll(f.term_code IN (${term:singlequote}), $term)\n      AND $__conditionalAll(f.department_code IN (${department:singlequote}), $department)\n), grade_scope AS (\n    SELECT *,\n        isNotNull(recorded_grade) AS has_grade,\n        (isNotNull(recorded_grade)\n         AND include_in_gpa = 1\n         AND isNotNull(grade_points)\n         AND credits > 0) AS eligible\n    FROM grade_source\n)\nSELECT\n    department_code AS `Department`,\n    coalesce(recorded_grade, 'Not recorded') AS `Grade`,\n    count() AS `Enrollments`,\n    uniqExact(student_key) AS `Unique students`,\n    100.0 * count() / nullIf(sum(count()) OVER (PARTITION BY department_code), 0) AS `Grade share`,\n    countIf(eligible) AS `Eligible records`,\n    sumIf(credits, eligible) AS `Eligible credits`,\n    sumIf(grade_points * credits, eligible)\n       / nullIf(sumIf(credits, eligible), 0) AS `Weighted points`\nFROM grade_scope\nGROUP BY department_code, recorded_grade\nORDER BY department_code,\n         isNotNull(recorded_grade) DESC,\n         max(grade_points) DESC NULLS LAST,\n         `Grade`"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "mappings": [],
+          "noValue": "—",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#5794F2"
+          },
+          "custom": {
+            "align": "right",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "inspect": false,
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Department"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "left"
+              },
+              {
+                "id": "custom.width",
+                "value": 160
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Filter to this department",
+                    "url": "/d/students-enrollment-kpis/student-enrollment-capacity?${term:queryparam}&var-department=${__value.raw:percentencode}",
+                    "targetBlank": false
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Grade"
+            },
+            "properties": [
+              {
+                "id": "custom.align",
+                "value": "left"
+              },
+              {
+                "id": "custom.width",
+                "value": 135
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Enrollments"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#B877D9"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Unique students"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 155
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Grade share"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 100
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "basic"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#B877D9"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Eligible records"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Eligible credits"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "custom.width",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Weighted points"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "noValue",
+                "value": "No eligible credits"
+              },
+              {
+                "id": "custom.width",
+                "value": 175
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#B877D9"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "showTypeIcons": false,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "Department",
+            "desc": false
+          }
+        ],
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      }
+    }
+  ],
+  "preload": false,
+  "refresh": "5m",
+  "schemaVersion": 40,
+  "tags": [
+    "students",
+    "enrollment",
+    "capacity",
+    "applications",
+    "clickhouse",
+    "snapshot",
+    "grades",
+    "academic-outcomes"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "term",
+        "label": "Academic term",
+        "description": "Choose one or more terms. Applications use entry term. All includes every term.",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "students-warehouse"
+        },
+        "query": "SELECT term_code\nFROM dim_term\nORDER BY year DESC,\n         multiIf(upper(session_code) = 'SP', 1,\n                 upper(session_code) = 'SU', 2,\n                 upper(session_code) = 'FA', 3, 4) DESC,\n         term_code DESC",
+        "definition": "SELECT term_code\nFROM dim_term\nORDER BY year DESC,\n         multiIf(upper(session_code) = 'SP', 1,\n                 upper(session_code) = 'SU', 2,\n                 upper(session_code) = 'FA', 3, 4) DESC,\n         term_code DESC",
+        "multi": true,
+        "includeAll": true,
+        "allowCustomValue": false,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "refresh": 1,
+        "regex": "",
+        "sort": 0,
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "name": "department",
+        "label": "Department",
+        "description": "Applies to enrollment and capacity panels. Applications always include all departments.",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-clickhouse-datasource",
+          "uid": "students-warehouse"
+        },
+        "query": "SELECT DISTINCT department_code\nFROM dim_department\nORDER BY department_code",
+        "definition": "SELECT DISTINCT department_code\nFROM dim_department\nORDER BY department_code",
+        "multi": true,
+        "includeAll": true,
+        "allowCustomValue": false,
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": [],
+        "refresh": 1,
+        "regex": "",
+        "sort": 0,
+        "hide": 0,
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30y",
+    "to": "now"
+  },
+  "timepicker": {
+    "hidden": true,
+    "refresh_intervals": [
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h"
+    ]
+  },
+  "timezone": "browser",
+  "title": "Student Enrollment, Capacity & Grades",
+  "uid": "students-enrollment-kpis",
+  "version": 19,
+  "weekStart": ""
+}

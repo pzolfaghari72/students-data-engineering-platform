@@ -1,0 +1,2 @@
+# Install separately from Airflow constraints to preserve Spark 3.5.6 / Py4J 0.10.9.7.
+pyspark==3.5.6

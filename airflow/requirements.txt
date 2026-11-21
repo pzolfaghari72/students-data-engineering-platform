@@ -1,0 +1,8 @@
+# Installed with the official Airflow 3.1.5 / Python 3.12 constraints.
+apache-airflow==3.1.5
+apache-airflow-providers-fab==3.0.3
+apache-airflow-providers-standard==1.10.0
+# 2.0.2 fails importing KafkaConsumer on Airflow's Python 3.12.
+kafka-python==2.3.3
+psycopg2-binary==2.9.11
+pyodbc==5.3.0

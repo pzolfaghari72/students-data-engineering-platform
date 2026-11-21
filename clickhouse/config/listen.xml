@@ -1,0 +1,5 @@
+<clickhouse>
+    <listen_host>0.0.0.0</listen_host>
+    <http_port from_env="CLICKHOUSE_HTTP_PORT"/>
+    <tcp_port from_env="CLICKHOUSE_NATIVE_PORT"/>
+</clickhouse>
