@@ -2,10 +2,6 @@
 
 A beginner-friendly, Docker-based data engineering project that moves student data from **SQL Server** through **PostgreSQL staging** into a **ClickHouse analytics warehouse**, orchestrates batch workflows with **Apache Airflow** and **Apache Spark**, and visualizes business KPIs with **Grafana**. An optional **Debezium + Kafka + Spark Structured Streaming** path explores change data capture (CDC).
 
-> **Project scope:** Local learning and development, not a production deployment template. The SQL Server Students database is external to Docker; real source data and credentials are not included in the repository.
->
-> **Evidence policy:** Screenshots and run results in this README should come from actual execution. A configured service is not automatically a successfully validated pipeline. Capture dates, distinguish successful from pending checks, and never publish credentials or identifiable student records.
-
 ## Contents
 
 - [Architecture](#architecture)
@@ -15,7 +11,6 @@ A beginner-friendly, Docker-based data engineering project that moves student da
 - [Run the batch pipeline](#run-the-batch-pipeline)
 - [CDC and streaming (optional)](#cdc-and-streaming-optional)
 - [Operations and troubleshooting](#operations-and-troubleshooting)
-- [Progress and validation](#progress-and-validation)
 - [Documentation handbook](#documentation-handbook)
 
 ## Architecture
@@ -341,18 +336,6 @@ docker compose logs --tail=100 grafana
 
 Use `make logs` for the project's standard logs target. Avoid posting unredacted connection strings, passwords, or personally identifying data.
 
-### Frequent issues
-
-| Symptom | What to check |
-| --- | --- |
-| `clickhouse-init` fails with `UNKNOWN_IDENTIFIER` / `degree_id` | The DDL still contains the obsolete legacy view section; keep only the current warehouse model definitions. |
-| A ClickHouse view refers to `*_v2_snapshots` or `warehouse_model_loads_v2` | The view SQL is stale after table renames; reapply corrected current views without dropping data. |
-| Airflow scheduler does not start | Inspect `airflow-init` / `clickhouse-init` one-shot dependency status and the API server health. |
-| Grafana panels show errors | Check ClickHouse view queries and Grafana ClickHouse datasource access. |
-| SQL Server extraction cannot connect | Check source host reachability **from containers**, credentials, encryption/certificate settings, and source permissions. |
-| Kafka Connect is up but CDC produces no data | Check actual connector/task status, SQL Server CDC rights, snapshot progress, and Kafka topics. |
-| A port is already in use | Change only the **host** side of the port mapping, and update Kafka advertised host port if applicable. |
-
 ### Stop safely
 
 ```bash
@@ -362,29 +345,6 @@ make down
 `make down` stops the local stack without intentionally removing named data volumes. **Never use `docker compose down -v` on an existing populated environment** unless permanent deletion has been deliberately planned and backed up. Do not remove ClickHouse/PostgreSQL volumes or Kafka/Spark checkpoints to troubleshoot schema errors.
 
 See the [operational runbook](./docs/10-operations/operational-runbook.md) and [startup and shutdown guide](./docs/10-operations/startup-and-shutdown.md).
-
-## Progress and validation
-
-These observations come from the screenshots shared on **2026-11-21**, plus earlier terminal query results. The Airflow latest-run timestamps in the screenshots are from **2026-11-18**. They are **historical observations**, not a fresh end-to-end validation of every stage.
-
-| Checkpoint | Evidence shown | Status / limit |
-| --- | --- | --- |
-| Source SQL Server model | Entity-relationship screenshot (Figure 1) | **Schema documented**; no live source connectivity test in the image |
-| Docker Compose services | Startup and `ps -a` screenshot (Figure 2) | Multiple services **healthy**, one-shot initialization **Exited (0)** at capture time; Spark services **Created** |
-| Airflow DAGs | DAG list (Figure 3) | Three DAGs registered, latest-run icons green on 2026-11-18; some earlier failed runs visible |
-| SQL Server → PostgreSQL batch | Staging DAG graph and latest-run marker (Figure 4) | **Latest DAG run marked successful**; per-table row reconciliations not shown |
-| PostgreSQL staging | DBeaver raw schema (Figure 5) | 15 raw source-table structures visible; data counts not shown |
-| PostgreSQL → ClickHouse warehouse | Green latest-run marker in DAG list (Figure 3) | **Latest DAG run marked successful**; task-level Spark logs/publication checks not shown |
-| ClickHouse schema | DBeaver warehouse diagram (Figure 6) | Current snapshot tables and analytical views visible; legacy tables also present |
-| ClickHouse enrollment query | Earlier `fact_course_enrollment` query returned **3,724,654** | **Observed successful count**; snapshot timestamp/reconciliation should be recaptured |
-| Grafana | Overview, capacity/admissions and grade panels (Figures 7–9) | **Panels render values**; business metric correctness still requires SQL reconciliation |
-| Kafka Connect | REST root JSON (Figure 10) | **API reachable**; connector/task and Kafka CDC event delivery not demonstrated |
-| Airflow CDC consumer | CDC DAG screenshot (Figure 11) | **Latest DAG run marked successful**, DAG paused; event ingestion volumes not demonstrated |
-| Spark Structured Streaming | Docker screenshot shows `Created` | **Not running in provided screenshot**; no successful micro-batch evidence |
-
-To close the remaining gaps, compare the latest record in `warehouse_model_loads` with current view row counts, inspect the successful Spark task logs, reconcile the Grafana query totals (particularly 50K applications per entry term), and independently verify connector/topic/CDC progress before updating the CDC status.
-
-The project's [runtime validation report](./docs/13-validation/runtime-validation-report.md), [implementation status](./docs/12-implementation/implementation-status.md), and [CDC readiness report](./docs/13-validation/cdc-readiness-report.md) are the reference points for dated testing.
 
 ## Documentation handbook
 
@@ -405,14 +365,3 @@ The README is the beginner-friendly entry point. Detailed guides remain the refe
 | Learning | [Six-phase learning roadmap](./docs/11-learning-path/learning-roadmap.md) |
 | Validation and project reports | [Implementation](./docs/12-implementation/implementation-status.md) · [Final report](./docs/12-implementation/final-project-report.md) · [Runtime report](./docs/13-validation/runtime-validation-report.md) · [CDC readiness](./docs/13-validation/cdc-readiness-report.md) · [Tests](./docs/13-validation/test-results.md) |
 | Architecture decisions | [ADR index](./docs/adr/index.md) |
-
-### Documentation contract
-
-- The [environment configuration reference](./docs/01-getting-started/environment-configuration.md) records config naming. Keep it synchronized with the hybrid `docker-compose.yml` and `.env.example`; do not assume old variables still apply.
-- Schemas, grains, and published snapshot semantics are detailed in the [data model](./docs/02-architecture/data-model.md).
-- Dated validation reports record evidence **at a point in time** and do not guarantee the current local stack is in the same state.
-- This project uses a single root README and the existing `docs/` directory as its documentation entry point.
-
----
-
-**Current documentation:** Eleven actual screenshots are embedded and labeled with what they prove. Optional next captures: the Airflow Spark warehouse task logs (`05-airflow-warehouse-run.png`) and a genuine streaming micro-batch (`10-spark-streaming.png`). Do not infer CDC success from service or DAG status alone.
