@@ -22,6 +22,20 @@ from airflow.sdk import dag
 )
 def postgres_to_clickhouse_warehouse():
 
+    # warehouse-safety-patch-v1
+    # Keep schedule=None: periodic snapshot republishing is NOT CDC/SCD Type 2.
+    verify_runtime = BashOperator(
+        task_id="verify_spark_runtime",
+        bash_command=(
+            "set -e; "
+            "command -v spark-submit >/dev/null; "
+            "command -v java >/dev/null; "
+            "test -r /opt/spark-apps/load_warehouse.py; "
+            "test -r /opt/spark-apps/warehouse_keys.py"
+        ),
+        retries=0,
+    )
+
     load_warehouse = BashOperator(
         task_id="load_clickhouse_warehouse",
         bash_command=(
@@ -42,7 +56,7 @@ def postgres_to_clickhouse_warehouse():
         execution_timeout=timedelta(hours=4),
     )
 
-    load_warehouse
+    verify_runtime >> load_warehouse
 
 
 dag = postgres_to_clickhouse_warehouse()

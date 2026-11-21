@@ -1,43 +1,18 @@
 # Batch Architecture
 
-The batch path is a finite workflow with two manually triggered Airflow DAGs.
-The first extracts all assessed tables through one SQL Server `SNAPSHOT`
-transaction. After the staging results are verified, the second runs Spark to
-transform a successful PostgreSQL snapshot into a ClickHouse warehouse
-generation.
+The batch path has **two separate, manually triggered Airflow DAGs**. A source-consistent full snapshot is loaded into PostgreSQL first. After validation, a Spark batch task reads the latest successful full run and publishes the ClickHouse analytical warehouse.
 
-## Current implementation
+## Execution
 
-1. `sqlserver_to_postgres_staging` creates a pipeline-run row.
-2. One bounded Python task opens one ODBC connection with autocommit disabled,
-   sets the configured isolation level to `SNAPSHOT`, and reads the 15 tables
-   sequentially using that same connection.
-3. Each table is written in batches to its typed `raw` table and tracked in
-   `metadata.extraction_batches`; a final task records `SUCCESS`, `PARTIAL`,
-   or `FAILED`.
-4. An operator separately triggers `postgres_to_clickhouse_warehouse` after
-   confirming the staging run and all expected table batches succeeded.
-5. Its Spark task selects the latest successful full run, reads the source
-   tables required by the nine dimensions and three facts, and validates that
-   all joins preserve each fact's source-row grain.
-6. Spark appends versioned rows to new `*_v2_snapshots` tables and inserts
-   `warehouse_model_loads_v2` last. Published views select only that completed
-   model snapshot; existing physical tables are retained.
+1. `sqlserver_to_postgres_staging` creates a run in PostgreSQL metadata.
+2. The extractor reads the 15 SQL Server source tables through a single `SNAPSHOT` transaction and records table-specific batches in `raw` / `metadata`.
+3. Its final task records `SUCCESS`, `PARTIAL`, or `FAILED`; a warehouse job must only use a fully successful run.
+4. `postgres_to_clickhouse_warehouse` is triggered separately. The **locally patched DAG** adds `verify_spark_runtime` ahead of `load_clickhouse_warehouse`; GitHub may still contain the one-task version until the local change is committed.
+5. Spark loads required raw tables, builds nine dimensions and three facts, checks key uniqueness / row-count preservation, and appends rows under a new `snapshot_id`.
+6. Spark inserts the `warehouse_model_loads` record last. The published ClickHouse views select that completed snapshot.
 
-The SQL Server setting `ALLOW_SNAPSHOT_ISOLATION` is currently reported OFF,
-so the extraction code is prepared but source execution is externally
-blocked. A partial batch can leave committed rows and is not valid warehouse
-input.
+The locally patched Spark loader checks whether the source full run has already been published and skips it when possible. This guard is **full-snapshot deduplication**, not incremental CDC processing. It does not solve concurrent multi-writer races; do not run the Airflow and standalone Compose warehouse publishers together.
 
-The Airflow scheduler image includes Java 17 and PySpark 3.5.6. Spark uses
-`local[2]` with a 768 MiB driver heap. The existing one-shot Compose Spark
-service remains available for manual warehouse runs. It is an alternative to
-the warehouse DAG; do not run both at the same time.
+The current physical tables are `dim_*_snapshots` and `fact_*_snapshots`, **without** the obsolete `_v2` suffix. SQL Server snapshot-isolation setting reports in dated 2026-11-16 material are historical, not proof of current configuration; confirm prerequisites when starting a new full extract.
 
-Implementation: `airflow/dags/sqlserver_to_postgres_staging.py`,
-`airflow/dags/postgres_to_clickhouse_warehouse.py`,
-`airflow/dags/students_staging/loader.py`,
-`airflow/dags/students_staging/source_tables.py`,
-`spark/load_warehouse.py`, and the two PostgreSQL/ClickHouse DDL directories.
-See the [canonical batch diagrams](./diagrams/batch-pipeline.md) and
-[snapshot consistency](../04-data-ingestion/snapshot-consistency.md).
+See [Batch Diagrams](./diagrams/batch-pipeline.md), [Warehouse Tables](../07-data-warehouse/fact-and-dimension-tables.md), and [Batch Execution](../10-operations/batch-execution.md).

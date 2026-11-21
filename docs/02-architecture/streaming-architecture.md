@@ -1,23 +1,15 @@
 # Streaming Architecture
 
-The repository contains SQL Server CDC capture through Debezium and Kafka,
-an existing bounded Airflow consumer, and an independent Spark Structured
-Streaming application. These are not interchangeable, and only one consumer
-should own the intended flow at a time.
+The streaming side consists of a Debezium SQL Server connector inside Kafka Connect, Kafka table topics, and a checkpointed Spark Structured Streaming application. A separate, finite Airflow CDC consumer also exists but is **paused** to avoid competing ownership of the same intended sinks.
 
-| Path | Behavior implemented | Validation boundary |
+| Segment | Implemented behavior | Evidence / limit |
 | --- | --- | --- |
-| SQL Server → Debezium → Kafka | Connector create-only registration helper, initial snapshot configuration, SQL Server topic filter and Kafka Connect service. | Plugin config was validated; no connector is registered and no source topics are present in the observed cluster. |
-| Kafka → Airflow → PostgreSQL | Scheduled consumer normalizes `c/r/u/d/t`, inserts history idempotently by Kafka position, applies PostgreSQL SCD2 for selected tables, and commits staging offsets transactionally. | DAG paused; existing history is not reconciled with current Kafka topics. |
-| Kafka → Spark → PostgreSQL + ClickHouse | Structured Streaming normalizes the envelope, persists PostgreSQL event metadata, appends ClickHouse CDC event rows and tracks generation/checkpoint offsets. | Code/configuration only; Spark was not started. Cross-sink atomicity is not provided. |
+| SQL Server -> Debezium -> Kafka | Capture the configured 15 `dbo` tables and publish source envelopes | Kafka/Connect healthy in the 2026-11-21 report; connector task state not independently shown by that summary |
+| Kafka -> Spark | Ten-second Structured Streaming trigger, checkpointed offsets, bounded Kafka input batches | Spark running and consuming in local health report |
+| Spark -> PostgreSQL | Append CDC event history and update streaming-generation offsets | `history.cdc_events` populated; initial snapshot offsets reached 100% |
+| Spark -> ClickHouse | Append CDC event rows; publish a generation only after snapshot boundary completion | `cdc_events` populated; active-generation publication not confirmed after final check |
+| Kafka -> Airflow CDC -> PostgreSQL | Alternative bounded consumer, with legacy SCD2 transitions | DAG remains paused while Spark owns streaming |
 
-The streaming app detects Debezium snapshot completion using Connect's JMX
-snapshot metric, captures Kafka end offsets, and waits until consumed offsets
-pass those per-partition bounds before publishing a generation. This internal
-control signal is not a Prometheus monitoring stack. It is not proof of a
-globally atomic SQL Server snapshot or an end-to-end exactly-once guarantee.
+Spark writes PostgreSQL and ClickHouse separately. A write failure/retry can lead to duplicate **physical** ClickHouse events; the event identities and query-time projection must be tested. Neither the Spark streaming sink nor the ClickHouse CDC projections merge incremental changes into the current batch fact/dimension views.
 
-Operational startup, the persisted checkpoint, and external blockers are
-described in the [streaming runbook](../10-operations/streaming-execution.md)
-and [readiness report](../13-validation/cdc-readiness-report.md). The
-canonical diagrams are in [streaming-pipeline.md](./diagrams/streaming-pipeline.md).
+Debezium's snapshot-complete metric and Kafka offsets establish a captured boundary, not one globally atomic SQL Server snapshot. The last user-supplied status after 100% was still `BOOTSTRAPPING`, requiring publication verification. See [Streaming Diagram](./diagrams/streaming-pipeline.md), [Recovery](../05-streaming-and-cdc/checkpoints-and-recovery.md), and [Streaming Execution](../10-operations/streaming-execution.md).

@@ -1,57 +1,38 @@
 # Data Model
 
-The SQL Server source model has 15 business tables. The current ClickHouse
-analytical slice is enrollment-focused; it does not reproduce the entire
-source model. Source keys/relationships below are based on the captured DDL
-and assessment exports under `db/source_assessment/`.
+The SQL Server source has 15 assessed business tables. The current ClickHouse analytical model serves enrollment, offerings, applications, and related dimensions; it does not reproduce all source entities. The source keys below are based on the captured DDL and assessment exports in `db/source_assessment/`, not a new live SQL Server catalog query.
 
-## Source entities and relationships
+## Source and staging
 
-| Subject | Tables and observed keys | Important relationships |
+| Subject | Main source keys | Related tables |
 | --- | --- | --- |
-| Student/application | `Students(StudentId)`, `StudentProfiles(StudentId)`, `Applicants(ApplicantId)` | Students reference `Degrees`, `ClassStandings`, `Terms`; Applicants reference `Terms`. |
-| Enrollment | `CourseEnrollments(CourseEnrollmentId)` | References `Students`, `CourseOfferings`, and nullable `Grades`. This is the largest table and the warehouse fact grain. |
-| Course catalog | `CourseOfferings(CourseOfferingId)`, `Courses(DepartmentCode, CourseNumber)` | Offering references course by composite key and `Terms`; Courses reference `Departments`. |
-| Academic calendar | `Terms(TermCode)`, `Sessions(SessionCode)` | Terms reference Sessions. |
-| Degree/reference | `Degrees(DegreeId)`, `DegreeTypes(DegreeTypeCode)`, `DegreeLevels(DegreeLevelCode)`, `Departments(DepartmentCode)`, `ClassStandings(ClassStandingCode)`, `DegreeRequirements(RequirementId)`, `Grades(Grade)` | Captured foreign-key results are the authoritative relationship list; review source DDL before assuming additional business semantics. |
+| Students | `Students(StudentId)` | `StudentProfiles`, `Degrees`, `ClassStandings`, `Terms` |
+| Applications | `Applicants(ApplicantId)` | `Terms` |
+| Enrollments | `CourseEnrollments(CourseEnrollmentId)` | `Students`, `CourseOfferings`, `Grades` |
+| Courses | `CourseOfferings(CourseOfferingId)`, `Courses(DepartmentCode, CourseNumber)` | `Departments`, `Terms` |
+| Academic references | `Terms(TermCode)`, `Sessions(SessionCode)`, `Degrees(DegreeId)` | Degree types, levels, requirements, grades, departments |
 
-## PostgreSQL schemas
+| PostgreSQL schema | Meaning |
+| --- | --- |
+| `raw` | Batch-scoped typed source rows (source key + `_batch_id`) |
+| `metadata` | Full/CDC run metadata, extraction batches, streaming generations / offsets |
+| `history` | CDC event images, source metadata and Kafka-position identity |
+| `scd` | Legacy Airflow CDC SCD2 entity versions; Spark stream does not maintain it |
 
-| Schema | Grain / purpose | Key implementation |
-| --- | --- | --- |
-| `raw` | One source row per table and extraction batch | Source primary key plus `_batch_id`; append-only. |
-| `metadata` | One row per pipeline run, extraction batch, table status, Kafka position, or stream generation | Run/batch states and unique offset keys support audit/retry. |
-| `history` | One Debezium event per Kafka topic/partition/offset | `uq_cdc_events_kafka_position` enforces event identity. |
-| `scd` | One version of an entity key | Partial unique current-version index; deleted versions are tombstones. |
+## Published ClickHouse batch model
 
-## ClickHouse dimensional model
+The nine dimensions are Applicant, Class Standing, Course, Date, Degree, Department, Grade, Student, and Term. The three facts have these grains:
 
-The published model has nine dimensions and three facts. Each fact is one row
-per source identity in the selected successful snapshot:
+| View | Grain |
+| --- | --- |
+| `fact_application` | One `ApplicantId` row in the selected full snapshot |
+| `fact_course_offering` | One `CourseOfferingId` |
+| `fact_course_enrollment` | One `CourseEnrollmentId` |
 
-| Fact | Grain | Main dimension keys |
-| --- | --- | --- |
-| `fact_application` | One row per `ApplicantId` source row | Applicant, application-received date, entry term |
-| `fact_course_offering` | One row per `CourseOfferingId` | Course, department, term |
-| `fact_course_enrollment` | One row per `CourseEnrollmentId` | Student, course, department, term, grade, degree, class standing |
+Physical tables use `dim_*_snapshots` / `fact_*_snapshots` with `snapshot_id`. A row in `warehouse_model_loads` is inserted last; current views expose only the latest published snapshot. `StudentProfiles` and `DegreeRequirements` are staged but not part of the 12-table published model. Student and applicant identifiers are pseudonymized; direct identifiers are not included in the published model.
 
-The nine dimensions are Applicant, Class Standing, Course, Date, Degree,
-Department, Grade, Student, and Term. `StudentProfiles` is not merged into
-Student: its `ProfileId` profiling is inconsistent and the source does not
-declare a foreign key. `DegreeRequirements` remains in staging and is not
-forced into one of the three fact grains.
+## Separate CDC model
 
-All warehouse tables append rows under a new `snapshot_id`. The versioned
-`*_v2_snapshots` physical tables are retained alongside the original physical
-tables. The `warehouse_model_loads_v2` row is written last, and the published
-views expose only its completed snapshot. Applicant and student keys are
-pseudonymized; direct identity/contact fields and date of birth are not
-published.
+ClickHouse `cdc_events` preserves streaming envelopes, and CDC views such as `cdc_current_state`, `cdc_course_enrollments`, and `cdc_student_scd2` derive projections once a streaming generation is active. These are not joined into the standard batch fact/dimension views. Snapshot IDs are **not** row-level SCD2 validity intervals.
 
-The CDC DDL defines an append-only `cdc_events` table and query-time views
-(`cdc_current_state`, `cdc_course_enrollments`, `cdc_student_scd2`) for the
-active streaming generation. It is separate from the published batch star
-schema and has not been populated in the observed runtime.
-
-See the canonical [ER diagram](./diagrams/system-context.md) and the detailed
-[warehouse table strategy](../07-data-warehouse/fact-and-dimension-tables.md).
+See [Warehouse Table Guide](../07-data-warehouse/fact-and-dimension-tables.md) and [SCD Type 2](../07-data-warehouse/scd-type-2.md).

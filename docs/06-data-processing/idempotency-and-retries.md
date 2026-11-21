@@ -1,17 +1,14 @@
 # Idempotency and Retries
 
-Idempotency differs by path and sink. There is no single transaction covering
-SQL Server, Kafka, PostgreSQL, ClickHouse and Spark checkpoints.
+There is no single atomic transaction spanning SQL Server, Kafka, PostgreSQL, ClickHouse and Spark checkpoints. The protection depends on each path.
 
-| Path | Retry protection | Remaining risk |
+| Path | Protection | Remaining risk |
 | --- | --- | --- |
-| Raw batch | Batch IDs scope rows; inserts are append-only. | A failed table may already have committed chunks; rerunning the whole DAG appends another full snapshot. |
-| Airflow CDC → PostgreSQL | Unique Kafka topic/partition/offset; event insertion and next-offset updates share a PostgreSQL transaction. | Kafka topic lineage/retention must still match saved offsets. |
-| Spark CDC → PostgreSQL | Same unique event identity; PostgreSQL generation offsets are updated transactionally. | PostgreSQL commit can succeed while ClickHouse fails. |
-| Spark CDC → ClickHouse | Event rows carry generation and Kafka position; views use source ordering for current state. | Physical `MergeTree` appends are not unique; retries may produce duplicate rows. |
-| Spark batch → ClickHouse | New snapshot UUID per attempt; all dimensions and facts are validated before writes; `warehouse_model_loads_v2` is written last; views select only completed model snapshots. | Partial rows remain physically and there is no retention cleanup. Retries can leave additional unpublished rows. |
+| Full staging snapshot | Rows are tagged with batch IDs and metadata; failed batches are excluded from published full-run selection | Failed table extracts may leave partial committed chunks; a new full run adds new batches |
+| Legacy Airflow CDC -> PostgreSQL | Unique Kafka topic/partition/offset; insert and offset commit share a PostgreSQL transaction | Topic/offset lineage must be preserved; keep this consumer paused while Spark owns CDC |
+| Spark CDC -> PostgreSQL | Unique Kafka event identities and generation metadata | Failure after PostgreSQL commit can cause replay into ClickHouse |
+| Spark CDC -> ClickHouse | Events carry generation and Kafka positions; views select latest state | Append-only `MergeTree` does not physically enforce position uniqueness; retries can duplicate rows |
+| Spark batch -> ClickHouse | Validations before writes; new `snapshot_id`; `warehouse_model_loads` last | Failed attempts can leave unpublished rows; concurrent publishers are not transactionally serialized |
+| Local full-run publication guard | Check existing `warehouse_model_loads.source_run_id` and skip if published | Protects common sequential reruns; not an atomic lock, not incremental CDC/SCD2 |
 
-Never claim exactly-once end-to-end delivery. For a retry, first identify the
-owning consumer, compare source topic positions with checkpoints and PostgreSQL
-metadata, and preserve the original event lineage. Operational rules are in
-[recovery](../05-streaming-and-cdc/checkpoints-and-recovery.md).
+A successful microbatch does not prove two-sink exactly-once behavior. Do not reset Kafka or Spark offsets to bypass a failure. Inspect event identities and generation metadata before recovery; see [Checkpoint Recovery](../05-streaming-and-cdc/checkpoints-and-recovery.md).

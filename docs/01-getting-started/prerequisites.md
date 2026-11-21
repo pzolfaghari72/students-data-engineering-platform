@@ -1,18 +1,16 @@
 # Prerequisites
 
-Use the project as a single-node development stack, not as a production
-deployment.
+This is a single-node local training stack, not a production deployment.
 
-| Requirement | Why it is needed | Evidence / limitation |
+| Requirement | Why it matters | Guidance |
 | --- | --- | --- |
-| Docker Engine or Docker Desktop with Compose v2 | Runs PostgreSQL, ClickHouse, Kafka, Connect, Spark, Airflow and optional Grafana KPI dashboards. | Compose definitions are in `docker-compose.yml`. |
-| 16 GB host RAM recommended | Several services have explicit memory caps, but PostgreSQL, ClickHouse and Airflow do not all have Compose memory limits. | See [resource management](../03-infrastructure/resource-management.md). |
-| Python 3.11 or 3.12 for host utilities/tests | `pyproject.toml` declares the host utility dependency; `requirements.txt` is the operational install entry point. Compose images provide workload dependencies. | Tests use Python's standard-library `unittest`; no third-party test dependency is required. |
-| SQL Server access | Batch and Debezium connect to the external `Students` database. | Host route, credentials, ODBC/TLS settings and source permissions are external. |
-| SQL Server DBA support for CDC | Enables database/table CDC and confirms SQL Agent/capture jobs and Debezium permissions. | CDC readiness report records the permission and snapshot-isolation blockers. |
-| Outbound image/artifact access | Builds pull container images, Spark JDBC packages and the Grafana plugin. | Initial Spark package resolution may need Maven access. |
+| Docker Engine / Desktop with Compose v2 | Runs PostgreSQL, ClickHouse, Kafka, Connect, Spark, Airflow and Grafana | Use project Make targets for controlled startup; do not start all optional services blindly. |
+| Sufficient RAM and disk | ClickHouse, Kafka, Spark and Airflow can contend for memory | Around 16 GB host RAM is recommended; the Docker allocation may be lower. See [Resource Management](../03-infrastructure/resource-management.md). |
+| Python 3.11 or 3.12 | Host utilities and unit tests | Workload Python dependencies come from the container images. |
+| External SQL Server `Students` access | Full snapshot and Debezium source | Required host routing, ODBC/TLS configuration and credentials are not bundled. |
+| SQL Server source/DBA cooperation | Snapshot isolation and CDC capture/correction | A **2026-11-16 historical report** recorded permissions and isolation blockers; later successful staging and CDC progress mean those old observations must not be described as current without rechecking. |
+| Network access for builds | Docker images, JDBC Maven packages, Grafana plugin | Needed for initial build/dependency downloads; not for reading already recorded health reports. |
 
-The source is not bundled as a runnable SQL Server container. Do not assume
-that a successful Compose configuration test implies source reachability.
-For setup and environment names see [installation](./installation.md) and
-[environment configuration](./environment-configuration.md).
+SQL Server is external to the project, not an included container. Successful `docker compose config --quiet` validates Compose structure but does not verify source permissions or a complete pipeline. Do not share `.env` or student records.
+
+See [Installation](./installation.md), [Environment Configuration](./environment-configuration.md), [Quick Start](./quick-start.md), and [Validation Update](../13-validation/validation-update-2026-11-21.md).

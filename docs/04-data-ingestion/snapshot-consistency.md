@@ -1,36 +1,19 @@
 # Snapshot Consistency
 
-Independent table extracts at different times can combine incompatible
-source states. The current batch loader addresses this in code by using one
-SQL Server `SNAPSHOT` isolation transaction for all 15 tables.
+Independent table extracts at different times can produce mutually inconsistent source states. The full SQL Server staging path addresses this by reading the 15 assessed tables through a **single SQL Server SNAPSHOT isolation transaction**.
 
-## What the code does
+## Batch extractor behavior
 
-`load_consistent_snapshot()` opens one `pyodbc` connection with autocommit
-disabled, executes `SET TRANSACTION ISOLATION LEVEL SNAPSHOT`, reads each
-table sequentially on that connection, then commits once all are complete.
-PostgreSQL batch commits are independent; only the SQL Server read transaction
-provides the shared source version.
+`load_consistent_snapshot()` opens one ODBC connection with autocommit disabled, sets `TRANSACTION ISOLATION LEVEL SNAPSHOT`, reads the assessed tables sequentially on the same connection, then finishes the source transaction. PostgreSQL row-batch writes and metadata commits are separate; the **SQL Server read transaction** provides a common source view.
 
-SQL Server must have `ALLOW_SNAPSHOT_ISOLATION` enabled for the `Students`
-database. The setting is currently reported OFF. This must be changed and
-verified by an authorized DBA before the new extraction path is run. Long
-snapshot transactions retain row versions and can increase `tempdb` pressure;
-coordinate with the DBA and schedule carefully.
-Read-committed snapshot isolation (RCSI) alone is not equivalent: RCSI gives a
-statement-level view, while this multi-table extract needs one transaction
-snapshot. The first source read establishes the transaction's view.
+The source database must have `ALLOW_SNAPSHOT_ISOLATION=ON` for this approach. A dated **2026-11-16** readiness report recorded it `OFF`. Later successful full staging and warehouse data exists, but the newer checks did not explicitly requery this SQL Server setting. Confirm the setting with the source DBA before another full extraction instead of asserting its current value from the old report. Read-committed snapshot isolation alone gives statement-level views, not the same multi-table transaction snapshot.
 
-## Distinguish the Debezium snapshot
+A long full-table snapshot may retain row versions and increase source `tempdb` load; coordinate such work with the SQL Server owner. Do not launch repeated full loads just to refresh a Grafana dashboard.
 
-Debezium's `snapshot.mode=initial` bootstraps the connector's captured tables
-and then transitions into CDC. It does not share the Airflow transaction,
-does not populate PostgreSQL `raw`, and is not by itself a cross-path
-point-in-time guarantee. Spark's configured boundary logic observes a
-Debezium completion metric and records Kafka end offsets; Kafka offsets are
-consumer positions, not SQL Server transaction isolation boundaries.
+## Separate Debezium initial snapshot
 
-No source-to-CDC reconciliation or common LSN handoff is verified yet. The
-existing PostgreSQL event history and offset records do not match topics in
-the currently observed Kafka cluster. See the
-[readiness report](../13-validation/cdc-readiness-report.md).
+Debezium `snapshot.mode=initial` is a **different** snapshot boundary. It writes Kafka topic events and then reads CDC changes; it does not share the Airflow transaction or populate PostgreSQL `raw`. Spark's snapshot-completion gate captures Kafka end offsets across topics. Kafka offsets prove **consumer positions**, not a single SQL Server transaction LSN across every topic.
+
+The 2026-11-21 user query reported `snapshot_events_complete=t` and 100% of captured offsets, while the generation status remained `BOOTSTRAPPING`. That resolves the old statement that there were no source topics at that time, but it does **not** establish final streaming publication or a globally consistent handoff between batch and CDC analytical models.
+
+See [CDC Validation Update](../13-validation/validation-update-2026-11-21.md), [Batch Execution](../10-operations/batch-execution.md), and [Streaming Execution](../10-operations/streaming-execution.md).

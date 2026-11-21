@@ -652,8 +652,39 @@ def _with_snapshot_id(frame: DataFrame, snapshot_id: str) -> DataFrame:
     )
 
 
+# warehouse-safety-patch-v1
+
+
+def _published_snapshot_exists(spark: SparkSession, source_run_id: int) -> bool:
+    """Fail closed on a warehouse read error; never republish a completed source run."""
+    # source_run_id comes from a PostgreSQL BIGINT, and int() prevents SQL injection.
+    query = (
+        "(SELECT count() AS published_count FROM warehouse_model_loads "
+        f"WHERE source_run_id = {int(source_run_id)}) AS published_check"
+    )
+    result = (
+        spark.read.format("jdbc")
+        .option("url", WAREHOUSE_JDBC_URL)
+        .option("user", WAREHOUSE_DB_USER)
+        .option("password", WAREHOUSE_DB_PASSWORD)
+        .option("driver", WAREHOUSE_DRIVER)
+        .option("dbtable", query)
+        .load()
+        .first()
+    )
+    if result is None:
+        raise RuntimeError("Could not check previous warehouse publications.")
+    return int(result["published_count"]) > 0
+
+
 def run(spark: SparkSession) -> None:
     source_run_id, batch_ids = _latest_snapshot_batches(spark)
+    if _published_snapshot_exists(spark, source_run_id):
+        LOGGER.info(
+            "Full staging run %s already has a published warehouse snapshot; skipping.",
+            source_run_id,
+        )
+        return
     snapshot_id = str(uuid.uuid4())
     dimensions, facts, sources = build_warehouse_frames(spark, batch_ids)
 

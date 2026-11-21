@@ -1,33 +1,24 @@
 # Project Overview
 
-This is a local learning platform for assessing a SQL Server student database,
-loading typed snapshots, transforming enrollment data, and serving analytical
-views. It also contains a separate CDC capture path and an implemented but
-not yet end-to-end-validated Spark streaming path.
+This is a local data engineering learning platform for SQL Server student data. It demonstrates a consistent full snapshot, PostgreSQL staging and run tracking, a Spark-built ClickHouse dimensional warehouse, an independently checkpointed CDC stream, and Grafana analytics.
 
-## Current capability
+## Implemented paths
 
-| Capability | Repository evidence | Status boundary |
+| Capability | Implementation | Last reported validation boundary |
 | --- | --- | --- |
-| Source assessment | `db/source_assessment/` | Historical results are stored; SQL is run manually. |
-| Batch ingestion | Airflow DAG and PostgreSQL `raw` schema | Code implements a serialized, single-SNAPSHOT-transaction load. A DBA must enable SQL Server snapshot isolation before execution. |
-| Warehouse batch | `spark/load_warehouse.py` and ClickHouse snapshot tables/views | Implemented; live re-validation is reported separately. |
-| CDC capture | Debezium registration helper, Kafka Connect, Kafka | Configured; source setup and topic lineage are blockers in the readiness report. |
-| CDC persistence | Airflow consumer and PostgreSQL `history`/`scd` | Implemented separately; its DAG is paused. |
-| Streaming | `spark/stream_cdc.py`, Compose profile, checkpoint volume | Code/configuration exist; it was not started or integration-tested. |
-| Business analytics | Grafana dashboards backed by ClickHouse | Provisioned; live query validation is reported separately. Infrastructure monitoring is intentionally excluded. |
+| Source assessment | `db/source_assessment/` | Historical source DDL and inspection evidence. |
+| Full snapshot extraction | `sqlserver_to_postgres_staging` DAG; `raw` and `metadata` schemas | Fifteen successful staged table batches in the observed full run. |
+| Batch transformation | `spark/load_warehouse.py` and warehouse DAG | Nine dimensions, three facts, populated ClickHouse views; source-to-current-output reconciliation still separate. |
+| CDC capture | Debezium in Kafka Connect to Kafka topics | Kafka and Connect healthy in 2026-11-21 report; full source task/Agent health not independently probed there. |
+| Spark streaming | `spark/stream_cdc.py` | Running with progressing offsets; snapshot-consumed flag reached true; final publication unconfirmed. |
+| CDC staging | `history.cdc_events`, generation metadata | Events persisted in PostgreSQL during streaming. |
+| CDC warehouse | ClickHouse `cdc_events` and query-time CDC projections | Event table populated; active generation still needed confirmation. |
+| Legacy PostgreSQL SCD2 | `scd.entity_versions` via alternative Airflow CDC consumer | Implementation exists; Airflow CDC DAG is paused while Spark owns CDC. |
+| Grafana | ClickHouse datasource, Student Enrollment, Capacity & Grades | Datasource healthy; 18-panel dashboard reported, including grades. |
+| Incremental analytical-star SCD2 | Not yet connected to CDC | Needs separate incremental loader, high-watermark/offset handling, and tests. |
 
-## Learning and use
+## Two important data models
 
-Follow the [learning roadmap](../11-learning-path/learning-roadmap.md). Begin
-with the [architecture](../02-architecture/architecture-overview.md), then
-use the [quick start](./quick-start.md). Commands and current blockers are
-owned by the [operations runbook](../10-operations/operational-runbook.md).
+The **batch star schema** reads the latest successful PostgreSQL `raw` batches and publishes complete snapshots. It does not automatically incorporate streaming events. The **CDC model** stores event history and derives current state or Student SCD2 at query time after a streaming generation is active. These are distinct models.
 
-## Data safety
-
-This repository includes a real student-data model. Do not copy real source
-records, `.env`, or credentials into commits, issue reports, screenshots, or
-documentation. ClickHouse intentionally excludes direct identifiers; the raw
-staging database does not. Use only approved access and storage for source
-data.
+The source is external to Docker. Do not commit student records or `.env`. Use [Architecture](../02-architecture/architecture-overview.md), [Quick Start](./quick-start.md), and [2026-11-21 validation](../13-validation/validation-update-2026-11-21.md) for the current project narrative.

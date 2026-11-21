@@ -1,19 +1,18 @@
 # Startup and Shutdown
 
-Start only the services required for the activity. The Makefile is the
-authoritative command interface; details and CDC prerequisites are in the
-[operational runbook](./operational-runbook.md).
+The Makefile is the canonical command interface. The following are **startup** commands, not routine health checks; they can recreate or change one-shot services if repeated.
 
-| Need | Entry point | Starts |
+| Need | Entry point | Starts / changes |
 | --- | --- | --- |
-| Databases / schema | `make up-core` | PostgreSQL, ClickHouse and one-shot initializers |
-| Batch DAG execution | `make up-batch` | Core plus Airflow API, scheduler and DAG processor |
-| Base pipeline + business dashboards | `make up-pipeline` | Core, Airflow and Grafana; not Kafka/Connect |
-| Business dashboards | `make dashboards-up` | Core plus Grafana; no infrastructure metrics stack |
-| CDC | `make cdc-up` | Kafka and Connect, then attempts connector registration |
-| Streaming | `make streaming-up` | Core, CDC registration, Spark streaming and Grafana dashboards; blocked until readiness gates pass |
+| Core databases / schemas | `make up-core` | PostgreSQL, ClickHouse and initialization steps |
+| Batch DAG execution | `make up-batch` | Core + Airflow API/scheduler/DAG processor |
+| Base batch + business dashboards | `make up-pipeline` / `make up` | Core + Airflow + Grafana; does not request Kafka/Connect |
+| Business dashboards | `make dashboards-up` | Core + Grafana (no infrastructure monitoring stack) |
+| New CDC setup | `make cdc-up` | Kafka/Connect and create-only connector registration attempt |
+| New streaming setup | `make streaming-up` | Core, CDC registration, Spark CDC and Grafana |
 
-Use `make status` to inspect services and `make down` to stop the project
-without deleting named volumes. Do not use volume deletion as routine
-shutdown. `make up` aliases `make up-pipeline`; it does not mean every
-optional profile.
+**Already-running installation (2026-11-21):** Kafka, Connect and Spark CDC were running and the captured initial snapshot offsets later reached 100%. Do **not** rerun `make cdc-up` or `make streaming-up` merely to verify that state. Inspect `make status` and the read-only checks in [Streaming Execution](./streaming-execution.md). Keep the alternate Airflow CDC DAG paused while Spark owns CDC.
+
+`make down` stops/removes containers and the network but retains named volumes; it **interrupts an active stream** and should be used deliberately. Never use `docker compose down -v` for normal cleanup. Persisted volumes are not backups.
+
+See [Operational Runbook](./operational-runbook.md) and [Validation Update](../13-validation/validation-update-2026-11-21.md).

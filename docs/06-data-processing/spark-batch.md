@@ -1,29 +1,20 @@
-# Spark Batch
+# Spark Batch Warehouse Loader
 
-The entry point is `spark/load_warehouse.py`. It reads PostgreSQL metadata and
-raw batches through JDBC, constructs nine dimensions and three facts, and
-writes a ClickHouse snapshot. It does not read or modify the CDC event log.
+The entry point `spark/load_warehouse.py` reads the latest successful **full** PostgreSQL raw snapshot and uses Spark JDBC transformations to produce nine dimensions and three facts in ClickHouse. It does **not** read `history.cdc_events` or maintain an incremental SCD Type 2 star schema.
 
-The loader requires the latest successful full run and successful batches for
-its 13 model inputs. `StudentProfiles` is intentionally excluded pending
-source-relationship validation. The job pseudonymizes applicant/student
-identifiers, excludes direct identifiers and date of birth, builds a calendar
-from application-received dates, and validates dimension/fact key uniqueness,
-dimension row counts and fact row-count preservation before writing. JDBC
-reads use a bounded fetch size so large tables stream instead of filling the
-driver heap.
+## Transformations and checks
 
-Every attempt creates a new UUID `snapshot_id`. Rows are appended to
-versioned MergeTree tables; `warehouse_model_loads_v2` is inserted last as the
-completion marker. Failed writes can leave unpublished rows but do not switch
-the current model views. Existing physical tables remain for rollback, and
-there is no cleanup job.
+- Require a successful source full run and successful batches for the 13 input tables used by the model.
+- Read large tables through JDBC with bounded fetch settings and configured local Spark resources.
+- Pseudonymize applicant and student keys, derive date / academic dimensions, join related source tables.
+- Validate dimension key uniqueness, required relationships and fact-grain/source count preservation before publication.
+- Append rows to `dim_*_snapshots` and `fact_*_snapshots` using one UUID `snapshot_id`.
+- Insert `warehouse_model_loads` **last**, allowing published views to select only a completed snapshot. A failure may leave unpublished rows; cleanup is not automated.
 
-Airflow runs the job with local Spark from the scheduler container. This
-avoids Docker-socket access and extra services. The existing one-shot Compose
-Spark service remains a manual alternative; do not run it concurrently with
-the Airflow task.
+## Local safety patch (2026-11-21)
 
-Runtime invocation and resource settings are in
-[Batch Execution](../10-operations/batch-execution.md); model details are in
-[Fact and Dimension Tables](../07-data-warehouse/fact-and-dimension-tables.md).
+A locally applied update adds `_published_snapshot_exists` and skips rebuilding an already published **source full run**. The locally updated Airflow DAG also adds `verify_spark_runtime`; Java 17 and Spark 3.5.6 were checked in `airflow-scheduler`. These changes may be absent from the GitHub default branch until committed. The guard prevents common duplicate full publications, not multi-writer races and not delta processing.
+
+`make warehouse-load` is an optional standalone Compose batch publisher. Do not overlap it with the Airflow warehouse task or with another warehouse publish.
+
+See [Batch Execution](../10-operations/batch-execution.md), [SCD Type 2](../07-data-warehouse/scd-type-2.md), and [Warehouse Tables](../07-data-warehouse/fact-and-dimension-tables.md).

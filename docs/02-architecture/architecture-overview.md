@@ -1,35 +1,30 @@
 # Architecture Overview
 
-The platform has a verified batch architecture and two alternative CDC
-consumers. Airflow's existing CDC consumer persists event history and SCD2
-versions in PostgreSQL. The independent Spark Structured Streaming code is
-configured to persist Kafka events in PostgreSQL and ClickHouse, but its
-end-to-end flow has not been validated. It must not be described as a
-production-ready or exactly-once pipeline.
+The platform has two distinct paths: a **manual full-snapshot warehouse pipeline** and a **separate, continuous CDC event pipeline**. Both were operational to different degrees in the 2026-11-21 local checks, but they do not yet form a unified incremental SCD Type 2 star schema.
 
 ## Component responsibilities
 
-| Component | Input | Responsibility | Output |
+| Component | Input | Purpose | Output |
 | --- | --- | --- | --- |
-| SQL Server `Students` | Operational student, degree, course and enrollment tables | Source of truth; optionally SQL Server CDC capture | Source rows and CDC log |
-| Airflow | Schedule/manual triggers and environment | Finite full-snapshot orchestration; optional bounded CDC consumer | PostgreSQL snapshot batches or CDC history |
-| PostgreSQL | Airflow source reads / CDC records | Typed raw staging, run metadata, CDC event log, SCD2 staging and offsets | Durable staging and replay evidence |
-| Debezium/Kafka Connect | SQL Server CDC | Read source changes and publish records | Kafka topics plus connector offsets |
-| Kafka | Debezium events | Retain partitioned event log for consumers | Replayable event stream within configured retention |
-| Spark batch | Successful PostgreSQL raw snapshot | Join and validate enrollment-grain warehouse frames | ClickHouse snapshot tables plus completion marker |
-| Spark streaming | Kafka topics | Normalize events, write PostgreSQL history and ClickHouse CDC event rows | Streaming-generation event records |
-| ClickHouse | Batch and configured CDC writes | BI-facing batch snapshots and CDC query-time current state | Analytics views |
-| Grafana | ClickHouse warehouse | Student business KPI dashboards | Analytics views |
+| SQL Server `Students` | Operational data | Full snapshot source and CDC source | Source rows and CDC capture data |
+| Airflow full snapshot DAG | SQL Server + run metadata | Single consistent source snapshot | PostgreSQL `raw` and `metadata` |
+| PostgreSQL | Batch rows and Kafka CDC events | Raw staging, history, run/batch/stream generation metadata | Successful batches, `history.cdc_events` |
+| Debezium / Kafka Connect | SQL Server CDC | Serialize source events into Kafka topics | Kafka event log |
+| Kafka | Debezium topics | Retain events and offsets | Source stream for one intended consumer |
+| Spark Structured Streaming | Kafka event envelopes | Persist PostgreSQL CDC history and ClickHouse CDC events; track checkpoints | Event stores and generation metadata |
+| Airflow CDC DAG | Alternative finite Kafka consumer | Legacy history and PostgreSQL `scd.entity_versions` updates | **Paused**; not used concurrently with Spark |
+| Spark warehouse batch | Latest successful PostgreSQL full snapshot | Build and validate nine dimensions / three facts | ClickHouse `*_snapshots` tables and publication marker |
+| ClickHouse | Batch snapshot rows + separate CDC event rows | Published business views; CDC query-time projections | Analytical views and CDC views |
+| Grafana | Published ClickHouse business views | KPI dashboards | No ingestion or orchestration |
 
-## Architectural boundary
+## Key boundary
 
-The batch warehouse consumes `raw`, not CDC history. The Airflow CDC consumer
-and Spark streaming service are separate consumers of the same event source;
-they must not be run concurrently against the same records unless an explicit
-ownership plan exists. Current runtime blockers and validation are in the
-[CDC readiness report](../13-validation/cdc-readiness-report.md).
+`PostgreSQL raw` -> `Spark batch` -> `ClickHouse fact/dimension snapshots` is **not** a CDC incremental pipeline. `Kafka` -> `Spark stream` -> `PostgreSQL history` plus `ClickHouse cdc_events` is a separate model. A checked high watermark or generation publication does not itself update `fact_course_enrollment` or `dim_student` batch views.
 
-See the canonical [system diagrams](./diagrams/system-context.md), the
-[batch design](./batch-architecture.md), the
-[streaming design](./streaming-architecture.md), and the
-[component decision records](../adr/index.md).
+The legacy Airflow consumer and long-running Spark consumer should not both be enabled against the intended shared sink. Keep Airflow CDC paused while Spark is running. The source event log and both sinks are not one distributed transaction; replay can create physical ClickHouse duplicates.
+
+## Verification and next development
+
+On 2026-11-21, the local Spark stream consumed the snapshot offset boundary (100%), but PostgreSQL still showed `BOOTSTRAPPING` in the supplied query. Publication activation and source-change reconciliation remain unverified. The incremental CDC-to-star-schema SCD2 loader also remains to be implemented and tested before scheduling the warehouse DAG.
+
+See the [Batch Architecture](./batch-architecture.md), [Streaming Architecture](./streaming-architecture.md), [Data Flow](./data-flow.md), and [Validation Update](../13-validation/validation-update-2026-11-21.md).

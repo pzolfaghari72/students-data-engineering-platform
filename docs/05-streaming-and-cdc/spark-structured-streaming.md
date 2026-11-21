@@ -1,32 +1,27 @@
 # Spark Structured Streaming
 
-`spark/stream_cdc.py` is an independent, long-running Spark application. It
-uses the Spark Kafka source, a persistent checkpoint, a ten-second
-processing-time trigger and `foreachBatch`; Airflow is not its runtime.
+`spark/stream_cdc.py` is an independent, long-running Spark 3.5.6 application. It is **not** an Airflow DAG task. It uses the Kafka source, ten-second processing-time triggers, bounded records per trigger, `foreachBatch`, and a persistent checkpoint volume.
 
 ## Microbatch flow
 
-1. Match Debezium topics with the configured database/schema/table pattern.
-2. Fail if no topics exist or Kafka retention has moved past a fresh
-   checkpoint's beginning offsets.
-3. Normalize each keyed JSON envelope and retain Kafka position plus SQL
-   Server commit/change LSN and event serial metadata.
-4. Persist raw event history and streaming-generation offsets in a PostgreSQL
-   transaction.
-5. Append the event rows to ClickHouse `cdc_events`.
-6. Publish the new ClickHouse generation only after Debezium snapshot
-   completion and captured per-partition offsets have been consumed.
+1. Subscribe to Debezium topics for the configured SQL Server database/schema/table pattern.
+2. Decode Kafka JSON envelopes and retain source operation, key, images, source LSN/version, topic, partition and offset.
+3. Insert replay-safe CDC event identities into PostgreSQL `history.cdc_events` and update generation offsets/metadata.
+4. Append corresponding CDC event rows into ClickHouse `students_warehouse.cdc_events`.
+5. Once Debezium's snapshot completion signal is seen, capture and consume every topic's initial snapshot end offset before publishing the ClickHouse generation and activating the PostgreSQL generation.
+6. Continue reading later CDC changes from the Spark checkpoint.
 
-The image definition is `spark/Dockerfile`; it uses the Spark 3.5.6 base image
-and installs the Python dependencies listed in `spark/requirements.txt`.
-PostgreSQL and ClickHouse JDBC drivers and the Spark Kafka connector are Maven
-artifacts configured in Compose, not Python packages. It exposes no monitoring
-endpoint. Compose runs `local[2]` with two shuffle
-partitions, a 768 MiB driver and a 1.5 GiB container limit. The complete
-configuration is in `docker-compose.yml` and the central
-[environment reference](../01-getting-started/environment-configuration.md).
+## What has been demonstrated
 
-This code has not been started in the recorded validation. PostgreSQL commit
-followed by ClickHouse append is not atomic; ClickHouse may contain duplicate
-physical rows after a replay. See
-[checkpoint recovery](./checkpoints-and-recovery.md) before operating it.
+A read-only health report on **2026-11-21** observed the Spark CDC container running, event counts increasing in PostgreSQL and ClickHouse, and no obvious errors in recent logs. The initial source snapshot contained **4,623,487** Kafka records across 15 topics. A later PostgreSQL query reported **100% consumed offsets** and `snapshot_events_complete=t`.
+
+The **same later query** still showed `status=BOOTSTRAPPING`. That is not proof that ClickHouse has an active stream generation; confirm `warehouse_stream_generations`, `active_stream_generations`, and PostgreSQL final status before marking the stream's published model active. Insert/update/delete behavior after bootstrap and replay across both sinks have not been fully verified.
+
+## Important distinctions
+
+- Spark streaming populates PostgreSQL **history**, not PostgreSQL `scd.entity_versions`.
+- ClickHouse CDC projection views use the separately published stream generation; batch `dim_*` and `fact_*` views remain full-snapshot models.
+- PostgreSQL and ClickHouse writes are not one transaction. A ClickHouse write retried after PostgreSQL commits may add duplicate **physical** rows. Do not call the two-sink path exactly-once.
+- The alternate Airflow CDC consumer stays paused while this stream owns CDC.
+
+Keep the checkpoint volume and Kafka offsets intact. To inspect, use [Streaming Execution](../10-operations/streaming-execution.md) and [Recovery](./checkpoints-and-recovery.md). The older [CDC readiness report](../13-validation/cdc-readiness-report.md) is historical, not a current startup prohibition.

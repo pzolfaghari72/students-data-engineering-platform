@@ -1,19 +1,15 @@
 # Data Flow
 
-This page is the concise map of where data actually moves. Canonical diagrams
-are linked rather than repeated.
-
-| Flow | Source → destination | Trigger | Durable state |
+| Flow | Source -> destination | Trigger | Durable record |
 | --- | --- | --- | --- |
-| Source assessment | SQL Server metadata/data profiling → manual CSV/workbook outputs | Human-run SQL | Historical files under `db/source_assessment/results/` |
-| Full snapshot | SQL Server → Airflow → PostgreSQL `raw` | Manual DAG run | Typed rows, `metadata.pipeline_runs` and `metadata.extraction_batches` |
-| Batch analytics | PostgreSQL selected raw batches → local Spark in Airflow → ClickHouse snapshot tables | Warehouse task in the successful snapshot DAG | `warehouse_model_loads_v2` publishes a completed snapshot |
-| CDC capture | SQL Server CDC → Debezium Connect → Kafka | Connector lifecycle | Kafka topics, schema history and Connect internal topics |
-| Legacy CDC staging | Kafka → Airflow → PostgreSQL `history` and `scd` | One-minute DAG schedule, currently paused | CDC event rows and PostgreSQL offsets |
-| Spark CDC | Kafka → Spark Structured Streaming → PostgreSQL history and ClickHouse CDC events | Independent restartable service | Spark checkpoint volume; PostgreSQL generation metadata |
-| Business analytics | ClickHouse → Grafana | Dashboard query | ClickHouse warehouse and Grafana state volumes |
+| Full snapshot | SQL Server -> Airflow -> PostgreSQL `raw` | Manual Airflow DAG | `metadata.pipeline_runs`, extraction batches and raw rows |
+| Batch warehouse | PostgreSQL latest successful full run -> Spark -> ClickHouse `*_snapshots` | Manual warehouse DAG or alternative one-shot Compose job | `warehouse_model_loads`, published `snapshot_id` |
+| CDC capture | SQL Server CDC -> Debezium Connect -> Kafka | Connector lifecycle | Kafka table topics and Connect offsets |
+| Continuous CDC | Kafka -> Spark -> PostgreSQL `history.cdc_events` | Independent streaming container | Spark checkpoint and PostgreSQL generation metadata |
+| CDC event warehouse | Same Spark microbatches -> ClickHouse `cdc_events` | Streaming write and publication gate | Events plus `warehouse_stream_generations` / `active_stream_generations` |
+| Legacy SCD2 staging | Kafka -> paused Airflow CDC consumer -> PostgreSQL `scd` | Alternative; **do not run with Spark** | Source entity versions and Airflow offsets |
+| BI | ClickHouse batch published views -> Grafana | Dashboard queries | Grafana state and ClickHouse snapshots |
 
-The batch path does not consume CDC history. Streaming writes CDC events but
-does not update the current batch fact view. These are separate models, with
-separate completeness and freshness semantics. See the [batch diagram](./diagrams/batch-pipeline.md)
-and [streaming diagram](./diagrams/streaming-pipeline.md).
+The current batch warehouse uses full snapshots, not CDC history. CDC streaming does not yet update the published batch dimensions or facts, even if it reaches a complete snapshot boundary. The source lineage, live generation status, and CDC replay behavior must be checked before claiming finished incremental analytics.
+
+See [Batch Diagram](./diagrams/batch-pipeline.md), [Streaming Diagram](./diagrams/streaming-pipeline.md), and [2026-11-21 validation](../13-validation/validation-update-2026-11-21.md).

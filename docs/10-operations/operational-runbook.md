@@ -1,44 +1,45 @@
 # Operational Runbook
 
-Run commands from the repository root with a valid local `.env`. This page is
-the canonical command reference; component pages link here rather than
-repeating commands.
+Run commands from the repository root with a configured local `.env`. This page is the canonical command index. Do not use setup commands as an alternative to checking a running stream.
 
 ## Make targets
 
-| Command | Effect | Prerequisite / caution |
+| Command | Effect | Caution |
 | --- | --- | --- |
-| `make init` | Validate local setup, preserve/create `.env`, generate missing secrets, prepare directories, parse Compose. | Does not start data pipelines. |
-| `make install` | Install `requirements.txt` into the selected host Python. | Use an isolated virtual environment. |
-| `make compose-config` | Validate rendered Compose configuration. | Does not start containers. |
-| `make up-core` | Start PostgreSQL/ClickHouse and initialize roles/schemas. | Retains existing volume data. |
-| `make up-batch` | Start core plus Airflow batch services. | Source extraction needs approved SQL Server access. |
-| `make up-pipeline` / `make up` | Start core, Airflow and Grafana business dashboards. | Does not start Kafka/Connect despite the broad alias name. |
-| `make dashboards-up` | Start core plus Grafana's ClickHouse-backed KPI dashboard. | Does not start infrastructure monitoring. |
-| `make cdc-up` | Start Kafka/Connect then invoke create-only connector registration. | **Blocked by current readiness findings; do not run yet.** |
-| `make streaming-up` | Start core, invoke CDC registration, then start the Spark stream and Grafana dashboards. | **Blocked; do not run until streaming gates pass.** |
-| `make warehouse-load` | Apply warehouse DDL and run one Spark batch in the standalone Compose job. | Optional manual alternative; do not overlap with the Airflow warehouse task. |
-| `make staging-init`, `make warehouse-init`, `make cdc-warehouse-init` | Apply idempotent schema scripts. | Schema changes need review; DDL does not migrate every existing table. |
-| `make status` | Show Compose service state. | Safe read-only inspection. |
-| `make logs` | Follow recent Compose logs. | Avoid sharing logs containing sensitive source details. |
-| `make test` | Run unit tests. | No database/service required. |
-| `make down` | Stop/remove Compose containers/network. | Named volumes are retained. |
+| `make init` | Validate local setup, preserve/create `.env`, generate required missing secrets, prepare dirs, parse Compose | Do not display secret values |
+| `make compose-config` | Validate Compose | No containers started |
+| `make up-core` | PostgreSQL, ClickHouse and schema initializers | Avoid unnecessary restarts during active CDC |
+| `make up-batch` | Core and Airflow services | Does not execute source DAG automatically |
+| `make up-pipeline` / `make up` | Core, Airflow and Grafana | Does not imply Kafka/Connect/Spark CDC are started |
+| `make dashboards-up` | Core and Grafana | Business dashboard only |
+| `make cdc-up` | Kafka/Connect plus one-shot connector registration | Use only for deliberate setup, not a health check |
+| `make streaming-up` | Core, CDC setup, Spark stream and Grafana | Do not rerun over an already-working checkpointed consumer |
+| `make warehouse-load` | Separate one-shot full Spark publisher | Alternative to Airflow warehouse DAG; never overlap |
+| `make staging-init`, `make warehouse-init`, `make cdc-warehouse-init` | Apply DDL/scripts | Review changes and database state before rerunning |
+| `make status` | Show Compose services | Read-only |
+| `make logs` | Follow container logs | May contain identifying/source information |
+| `make test` | Unit tests | Local code test, not full integration |
+| `make down` | Stop/remove containers and network, preserve named volumes | Disrupts a running stream; only stop deliberately |
 
-## Diagnostics
+## Airflow operation
 
-Use `docker compose ps`, service-specific `docker compose logs --tail=100
-<service>`, and `docker stats --no-stream`. For Kafka/Connect details, check
-the [CDC operations page](./streaming-execution.md); for data inspection use
-the [staging](../04-data-ingestion/postgresql-staging.md) and
-[warehouse](../07-data-warehouse/fact-and-dimension-tables.md) guides.
+- Full snapshot `sqlserver_to_postgres_staging`: manual.
+- Warehouse `postgres_to_clickhouse_warehouse`: manual; locally patched preflight `verify_spark_runtime` plus `load_clickhouse_warehouse`, if those uncommitted files are present.
+- Legacy Kafka CDC `sqlserver_debezium_cdc_to_staging`: **paused while Spark CDC owns the source stream**.
 
-## Safe operating rules
+## Read-only diagnostics
 
-- Never reset/delete Kafka topics, connector offsets or Spark checkpoints as
-  routine troubleshooting.
-- Never infer Debezium snapshot completion from REST `RUNNING` alone.
-- Do not run Airflow CDC and Spark streaming as competing consumers for the
-  same planned sink.
-- Do not treat `.env.example` as runtime configuration or disclose `.env`.
-- `docker compose down` preserves named volumes; volume deletion is
-  destructive and is not documented as a normal stop procedure.
+```bash
+make status
+docker compose --profile '*' ps -a
+# If available in the local working tree:
+python3 check_students_platform.py
+```
+
+Airflow UI: `http://localhost:18080`; Grafana: `http://localhost:13000`. For the initial CDC boundary and current publication state, follow [Streaming Execution](./streaming-execution.md); for full source/warehouse operations, see [Batch Execution](./batch-execution.md).
+
+## Safety, semantics and validation
+
+Do not reset/delete Kafka topics, connector offsets or Spark checkpoints in ordinary troubleshooting. Physical ClickHouse CDC appends are not exactly-once across retries. The current Spark event path does not update batch warehouse star-schema dimensions/facts or implement materialized incremental SCD2. The final CDC generation activation remains to be verified even after the last 100% boundary report.
+
+Keep `.env` private. Persisted named volumes are **not backups**. The historical [2026-11-16 readiness report](../13-validation/cdc-readiness-report.md) and newer [2026-11-21 status](../13-validation/validation-update-2026-11-21.md) must be interpreted with their evidence dates.

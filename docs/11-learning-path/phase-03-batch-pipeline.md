@@ -1,23 +1,13 @@
-# Phase 3 — Batch Pipeline
+# Phase 3 - Batch Pipeline
 
-**Objectives:** follow a consistent SQL Server snapshot, staging metadata and
-warehouse publication.
+**Objectives:** trace a consistent SQL Server full snapshot, PostgreSQL metadata / raw batches, Spark transformation and ClickHouse publication.
 
-**Read:** [source extraction](../04-data-ingestion/source-extraction.md),
-[snapshot consistency](../04-data-ingestion/snapshot-consistency.md),
-[Airflow](../04-data-ingestion/airflow.md), and
-[Spark batch](../06-data-processing/spark-batch.md).
+**Read:** [Source Extraction](../04-data-ingestion/source-extraction.md), [Snapshot Consistency](../04-data-ingestion/snapshot-consistency.md), [Airflow](../04-data-ingestion/airflow.md), and [Spark Batch](../06-data-processing/spark-batch.md).
 
-**Inspect:** `loader.py`, `source_tables.py`, metadata/raw DDL,
-`load_warehouse.py`, and `warehouse_ddl.sql`.
+**Inspect:** the source table list, `students_staging/loader.py`, staging DDL, `spark/load_warehouse.py`, and `db/warehouse_clickhouse/warehouse_ddl.sql`.
 
-**Exercise:** using existing run metadata, trace the selected source run,
-table batch IDs, all three fact-grain checks, and the final ClickHouse
-`warehouse_model_loads_v2` publication row. Running a new source load
-requires SQL Server and DBA approval; current snapshot isolation is disabled.
+**Exercise:** starting from an existing **successful** full staging run, identify its table batch IDs and check three fact grains. Find the ClickHouse **`warehouse_model_loads`** publication row (not the obsolete `_v2` marker), and explain why only its referenced `snapshot_id` is visible in published views. The local safety patch skips an already published full run.
 
-**Expected result:** identify that the same SQL Server transaction reads all
-15 tables and Spark selects a completed full run rather than mixing batches.
+**Expected result:** explain the one-transaction SQL Server source read, separate PostgreSQL target commits, and why the warehouse loader selects the latest successful full run instead of CDC history.
 
-**Validation:** compare each fact's output rows to its source rows and verify
-the publication marker is last. Do not bypass missing source/DBA prerequisites.
+**Validation:** confirm actual source isolation setting with the DBA before a new extract. Older reports of isolation `OFF` were recorded in November 16 evidence; do not treat them as a current measurement. A 15-minute schedule would **not** convert this full-loader into an incremental SCD2 job.

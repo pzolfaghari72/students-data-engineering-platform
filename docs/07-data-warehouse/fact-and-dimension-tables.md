@@ -1,37 +1,31 @@
 # Fact and Dimension Tables
 
-`warehouse_ddl.sql` defines append-only, versioned physical tables and
-current-facing views. The v2 model has nine dimensions and three facts. Each
-physical row belongs to one `snapshot_id`.
+The batch model in `db/warehouse_clickhouse/warehouse_ddl.sql` contains nine dimensions and three facts. It is an **append-only full-snapshot model**, not row-level SCD Type 2. All physical rows carry a `snapshot_id`, and views filter to the latest completed row in `warehouse_model_loads`.
 
-| Published view | Physical table | Grain and key attributes |
+## Current model names and grains
+
+| Published view | Physical table | Grain / key |
 | --- | --- | --- |
-| `dim_applicant` | `dim_applicant_v2_snapshots` | One source `ApplicantId` per snapshot; pseudonymous key, application type and status. |
-| `dim_class_standing` | `dim_class_standing_v2_snapshots` | One class-standing code; name, degree-level attributes and required credits. |
-| `dim_course` | `dim_course_v2_snapshots` | One `(DepartmentCode, CourseNumber)`; department, title, credits and maximum section size. |
-| `dim_date` | `dim_date_v2_snapshots` | One calendar day in the application-received-date range; calendar attributes and `YYYYMMDD` key. |
-| `dim_degree` | `dim_degree_v2_snapshots` | One `DegreeId`; degree, department, type and level descriptions. |
-| `dim_department` | `dim_department_v2_snapshots` | One department code and name. |
-| `dim_grade` | `dim_grade_v2_snapshots` | One grade code; nullable points and `IncludeInGpa`. |
-| `dim_student` | `dim_student_v2_snapshots` | One student per snapshot; pseudonymous key, status, degree, standing and enrollment term. |
-| `dim_term` | `dim_term_v2_snapshots` | One term code; session name and year. |
-| `fact_application` | `fact_application_v2_snapshots` | One `ApplicantId` source row; application date, entry term, count and numeric application measures. |
-| `fact_course_offering` | `fact_course_offering_v2_snapshots` | One `CourseOfferingId`; course, department, term, section, capacity and offering count. |
-| `fact_course_enrollment` | `fact_enrollment_v2_snapshots` | One `CourseEnrollmentId`; student, offering, course, department, term, grade, degree, standing and enrollment count. |
-| `warehouse_model_loads_v2` | `warehouse_model_loads_v2` | One successful v2 publication record; source run and row counts for all 12 target tables. |
+| `dim_applicant` | `dim_applicant_snapshots` | One pseudonymous `ApplicantId` / `applicant_key` |
+| `dim_class_standing` | `dim_class_standing_snapshots` | One class-standing code |
+| `dim_course` | `dim_course_snapshots` | One `(DepartmentCode, CourseNumber)` |
+| `dim_date` | `dim_date_snapshots` | One calendar day / `date_key` |
+| `dim_degree` | `dim_degree_snapshots` | One `DegreeId` |
+| `dim_department` | `dim_department_snapshots` | One department code |
+| `dim_grade` | `dim_grade_snapshots` | One grade code |
+| `dim_student` | `dim_student_snapshots` | One pseudonymous `StudentId` / `student_key` |
+| `dim_term` | `dim_term_snapshots` | One term code |
+| `fact_application` | `fact_application_snapshots` | One source `ApplicantId` row |
+| `fact_course_offering` | `fact_course_offering_snapshots` | One `CourseOfferingId` |
+| `fact_course_enrollment` | `fact_enrollment_snapshots` | One `CourseEnrollmentId` |
+| Publication marker | `warehouse_model_loads` | Completed `snapshot_id`, `source_run_id`, row counts and `completed_at` |
 
-Applicant and student names, contact details, addresses, and dates of birth
-are not published. Applicant and student keys use the configured HMAC secret;
-other dimensions use deterministic, namespaced SHA-256 keys. Student keys
-retain their prior HMAC input format for cross-snapshot stability.
+**Do not use** old `_v2_snapshots` physical table names or `warehouse_model_loads_v2` in commands against the current schema. Prior versions may remain in older reports or historic databases, but the supplied current DDL uses the names above.
 
-Spark writes all dimensions and facts only after validating their joins and
-keys, then inserts the model-load record last. Current views filter to that
-record's `snapshot_id`. Failed attempts may leave unpublished rows in physical
-tables. There is no automated cleanup. The original physical tables and
-`warehouse_loads` remain untouched for rollback.
+## Publication and interpretation
 
-The batch facts are refreshed from a full source snapshot, not incrementally
-updated. CDC has a separate `cdc_events` MergeTree log and query-time
-`cdc_course_enrollments` projection. CDC is not merged into these batch facts;
-see [CDC warehouse design](./cdc-warehouse-design.md).
+Spark reads successful `raw` batch IDs, builds transformed data, checks row counts and key uniqueness, appends all dimension/fact snapshots, then appends the publication marker. Grafana queries published **views**, not every physical snapshot row. Counting all physical rows over all `snapshot_id` values would overcount repeated full loads.
+
+The local 2026-11-21 safety patch adds a guard against publishing the same full staging run twice. It does not apply incremental CDC events or change ClickHouse table definitions. Failed writes can leave unpublished physical rows. Student and applicant keys are pseudonymous, not anonymous; source identifiers are not published.
+
+For incremental data, `cdc_events`, `cdc_current_state` and `cdc_student_scd2` are **separate** CDC objects. They do not update the batch star schema automatically. See [CDC Warehouse Design](./cdc-warehouse-design.md), [SCD Type 2](./scd-type-2.md), and [Publication](./data-publication-and-reconciliation.md).

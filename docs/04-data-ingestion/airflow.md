@@ -1,34 +1,24 @@
 # Airflow in This Project
 
-Airflow orchestrates bounded workflows. Its services use LocalExecutor and a
-PostgreSQL metadata database; it is not the runtime for an indefinitely
-running Structured Streaming query.
+Airflow 3.1.5 uses LocalExecutor and a PostgreSQL metadata database. It orchestrates **finite** full-snapshot and warehouse jobs; the long-running Spark Structured Streaming application is independent of Airflow.
 
-| Airflow concept | Project use |
-| --- | --- |
-| DAG | `sqlserver_to_postgres_staging` and `postgres_to_clickhouse_warehouse` are manually triggered batch DAGs. `sqlserver_debezium_cdc_to_staging` is scheduled every five minutes and created paused. |
-| Task | Snapshot DAG: create run → one `load_consistent_snapshot` task → finalize status. Warehouse DAG: one `load_clickhouse_warehouse` Spark task. CDC DAG: one bounded `consume_debezium_events` task. |
-| Scheduler | Creates finite task runs and applies schedule/retry rules. |
-| DAG processor | Parses mounted DAG files. |
-| API server | UI/API endpoint. |
-| Executor | LocalExecutor runs task processes within the Airflow deployment. |
-| Retry/timeout | Snapshot uses no retry and a four-hour task limit; warehouse uses one retry, five-minute delay and four-hour task limit; CDC has one retry, two-minute delay and ten-minute task limit. |
-| Catchup/backfill | All three DAGs set `catchup=False`; they do not replay every historical schedule automatically. |
-| XCom | Snapshot run ID passes from run creation to snapshot/finalization tasks. |
+| DAG | Execution | Tasks | Scope |
+| --- | --- | --- | --- |
+| `sqlserver_to_postgres_staging` | Manual, `schedule=None` | `create_pipeline_run` -> `load_consistent_snapshot` -> `finish_pipeline_run` | Consistent full SQL Server snapshot into PostgreSQL |
+| `postgres_to_clickhouse_warehouse` | Manual, `schedule=None` | Locally patched: `verify_spark_runtime` -> `load_clickhouse_warehouse`; GitHub source may have only loader task | Spark transforms the latest successful **full staging snapshot** |
+| `sqlserver_debezium_cdc_to_staging` | Paused | `consume_debezium_events` | Legacy bounded Kafka consumer, **not used alongside Spark CDC** |
 
-The full snapshot is one transaction across source tables but writes target
-chunks independently. The warehouse DAG is separate: after verifying the
-staging run, an operator manually triggers it to publish the latest successful
-snapshot. The CDC task bounds each run by record count/time and commits
-PostgreSQL event history and consumer offsets in one transaction. The CDC DAG
-is created paused; current runtime state and prerequisites are recorded in the
-[readiness report](../13-validation/cdc-readiness-report.md).
+The scheduler launches Spark batch work locally; the standalone Compose `spark-warehouse` service is an alternative, not a second concurrent publisher. The warehouse DAG is **not** an incremental CDC/SCD2 job; merely changing its schedule would not implement delta processing.
 
-Implementation map: DAGs and shared staging functions are under `airflow/dags/`;
-the custom Airflow image is defined in `airflow/plugins/Dockerfile`.
-Relevant entry points are `airflow/dags/sqlserver_to_postgres_staging.py`,
-`airflow/dags/postgres_to_clickhouse_warehouse.py`,
-`airflow/dags/sqlserver_debezium_cdc_to_staging.py`, and
-`airflow/dags/students_staging/`. Use the
-[batch sequence diagram](../02-architecture/diagrams/batch-pipeline.md) and
-[runbook](../10-operations/batch-execution.md) for operations.
+## Verified prerequisites on 2026-11-21
+
+- DAG processor's local import-error check returned `No data found`.
+- Java 17 and `spark-submit` version 3.5.6 existed inside `airflow-scheduler`.
+- `/opt/spark-apps/load_warehouse.py` and `warehouse_keys.py` were readable.
+- The locally applied safety patch inserted a preflight task and a published-full-run guard. These are not evidence of an executed successful warehouse task or a merged GitHub commit.
+
+## Operating rules
+
+Trigger a new full extraction only when a controlled baseline refresh is needed. Check all required staging batches before running the warehouse DAG. Keep CDC Airflow paused while the Spark CDC stream owns the source stream. Preserve metadata, source offsets and Spark checkpoints.
+
+See [Batch Execution](../10-operations/batch-execution.md), [Streaming Execution](../10-operations/streaming-execution.md), and [Validation Update](../13-validation/validation-update-2026-11-21.md).
