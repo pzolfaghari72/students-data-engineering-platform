@@ -6,10 +6,12 @@ import json
 import logging
 import os
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from students_staging.source_tables import SCD2_TABLES, SOURCE_TABLES
+
+UTC = timezone.utc
 
 LOGGER = logging.getLogger(__name__)
 POLL_RECORDS = 500
@@ -23,7 +25,7 @@ def _required_env(name: str) -> str:
 
 
 def _decode_json(value: Any) -> Any:
-    if isinstance(value, bytes):
+    if isinstance(value, (bytes, bytearray)):
         return json.loads(value.decode("utf-8"))
     if isinstance(value, str):
         return json.loads(value)
@@ -220,7 +222,7 @@ def snapshot_boundary_consumed(
 ) -> bool:
     """Check that Spark has consumed every Kafka record through the snapshot cut."""
     return boundary_captured and all(
-        consumed_offsets.get(key, -1) >= end_offset
+        consumed_offsets.get(key, 0) >= end_offset
         for key, end_offset in end_offsets.items()
     )
 

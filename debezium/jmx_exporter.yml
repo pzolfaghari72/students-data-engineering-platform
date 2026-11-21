@@ -1,11 +1,16 @@
 rules:
-  - pattern: 'debezium.sql_server<type=connector-metrics, context=snapshot, server=(.+)><>SnapshotCompleted'
+  - pattern: 'debezium\.sql_server<type=connector-metrics, server=([^,]+), task=([^,]+), context=snapshot, database=([^>]+)><>SnapshotCompleted'
     name: debezium_snapshot_completed
     labels:
       server: "$1"
+      task: "$2"
+      database: "$3"
     type: GAUGE
-  - pattern: 'debezium.sql_server<type=connector-metrics, context=snapshot, server=(.+)><>(SnapshotRunning|SnapshotAborted|TotalTableCount|RemainingTableCount|RowsScanned)'
-    name: "debezium_sqlserver_snapshot_$2"
+
+  - pattern: 'debezium\.sql_server<type=connector-metrics, server=([^,]+), task=([^,]+), context=snapshot, database=([^>]+)><>(SnapshotRunning|SnapshotAborted|TotalTableCount|RemainingTableCount)'
+    name: "debezium_sqlserver_snapshot_$4"
     labels:
       server: "$1"
+      task: "$2"
+      database: "$3"
     type: GAUGE

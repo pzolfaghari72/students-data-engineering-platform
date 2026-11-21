@@ -413,6 +413,13 @@ def finish_pipeline_run(**context: Any) -> None:
             status,
             successful_batches,
             len(SOURCE_TABLES),
+        
         )
+
+        if status != "SUCCESS":
+            raise AirflowException(
+                error_message
+                or f"Pipeline run_id={run_id} finished with status={status}."
+            )
     finally:
         connection.close()

@@ -8,7 +8,7 @@ x-airflow-common: &airflow-common
     dockerfile: airflow/plugins/Dockerfile
   image: students-platform-airflow:3.1.5-local
   # Linux owner ID for files mounted into Airflow containers.
-  user: "1000:0"
+  user: "${AIRFLOW_UID:-1000}:0"
   restart: unless-stopped
   extra_hosts:
     - "host.docker.internal:host-gateway"
@@ -17,6 +17,7 @@ x-airflow-common: &airflow-common
   environment: &airflow-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+    PYTHONPATH: /opt/airflow/dags
     # Fresh DAGs wait for an explicit trigger/unpause. Existing DAG states persist.
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "True"
     AIRFLOW__CORE__PARALLELISM: 4
@@ -24,7 +25,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
 
     # Container-to-container URL; this is not the host-published Airflow UI address.
-    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-api-server:8080/execution/
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: ${AIRFLOW_API_SERVER_URL:?Set AIRFLOW_API_SERVER_URL}
 
     # Airflow encryption and authentication secrets.
     AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:?Set AIRFLOW__CORE__FERNET_KEY in .env}
@@ -438,7 +439,7 @@ services:
       ADVERTISED_PORT: ${CONNECT_INTERNAL_PORT:?Set CONNECT_INTERNAL_PORT}
       REST_PORT: ${CONNECT_INTERNAL_PORT:?Set CONNECT_INTERNAL_PORT}
       KAFKA_HEAP_OPTS: ${CONNECT_HEAP_OPTS:?Set CONNECT_HEAP_OPTS}
-      # Spark reads this endpoint to detect Debezium snapshot completion.
+      # Expose Debezium runtime metrics for diagnostics.
       KAFKA_OPTS: "-javaagent:/opt/kafka/libs/jmx_prometheus_javaagent.jar=${CONNECT_METRICS_PORT:?Set CONNECT_METRICS_PORT}:/opt/kafka/config/jmx_exporter.yml"
 
     # Expose the Kafka Connect REST API locally.
@@ -501,7 +502,7 @@ services:
       context: ./spark
       dockerfile: Dockerfile
     profiles: ["streaming"]
-    restart: unless-stopped
+    restart: no
     stop_grace_period: 60s
     mem_limit: 1536m
     cpus: 1.5
@@ -528,11 +529,11 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: "${KAFKA_HOST:?Set KAFKA_HOST}:${KAFKA_INTERNAL_PORT:?Set KAFKA_INTERNAL_PORT}"
       DEBEZIUM_TOPIC_PREFIX: ${DEBEZIUM_TOPIC_PREFIX:?Set DEBEZIUM_TOPIC_PREFIX}
       DEBEZIUM_CONNECTOR_NAME: ${DEBEZIUM_CONNECTOR_NAME:?Set DEBEZIUM_CONNECTOR_NAME}
-      # Used as a snapshot-completion gate, not as an observability service.
-      DEBEZIUM_METRICS_URL: "http://${CONNECT_HOST:?Set CONNECT_HOST}:${CONNECT_METRICS_PORT:?Set CONNECT_METRICS_PORT}/metrics"
+     # Read Debezium's saved source offsets during streaming bootstrap.
+      CONNECT_REST_URL: "http://${CONNECT_HOST:?Set CONNECT_HOST}:${CONNECT_INTERNAL_PORT:?Set CONNECT_INTERNAL_PORT}"
       SOURCE_DB_NAME: ${SOURCE_DB_NAME:?Set SOURCE_DB_NAME}
       SOURCE_DB_SCHEMA: ${SOURCE_DB_SCHEMA:?Set SOURCE_DB_SCHEMA}
-      STAGING_DB_HOST: 15432:5432
+      STAGING_DB_HOST: ${POSTGRES_HOST:?Set POSTGRES_HOST}
       STAGING_DB_PORT: ${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}
       STAGING_DB_NAME: ${STAGING_DB_NAME:?Set STAGING_DB_NAME}
       STAGING_DB_USER: ${STAGING_DB_USER:?Set STAGING_DB_USER}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import json
 import logging
 import os
@@ -10,7 +11,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.parse import quote
+from urllib.request import ProxyHandler, build_opener
 
 import psycopg2
 from psycopg2.extras import Json
@@ -25,6 +27,7 @@ from pyspark.sql.types import (
 )
 
 from students_staging.cdc_loader import (
+    _apply_scd2,
     _decode_json,
     advance_consumed_offsets,
     normalize_debezium_record,
@@ -32,7 +35,7 @@ from students_staging.cdc_loader import (
     snapshot_boundary_consumed,
     source_version_order,
 )
-from students_staging.source_tables import SOURCE_TABLES
+from students_staging.source_tables import SCD2_TABLES, SOURCE_TABLES
 
 LOGGER = logging.getLogger("students_cdc_stream")
 EXPECTED_TABLES = [source_table for source_table, _ in SOURCE_TABLES]
@@ -139,24 +142,134 @@ def _validate_kafka_start(checkpoint_dir: str) -> None:
 
 
 def _snapshot_completed() -> bool:
-    endpoint = _required_env("DEBEZIUM_METRICS_URL")
+    """Confirm snapshot completion from committed Kafka Connect offsets."""
+    connector = quote(_required_env("DEBEZIUM_CONNECTOR_NAME"), safe="")
+    base_url = _required_env("CONNECT_REST_URL").rstrip("/")
+    endpoint = f"{base_url}/connectors/{connector}/offsets"
+    expected_server = _required_env("DEBEZIUM_TOPIC_PREFIX")
+    expected_database = _required_env("SOURCE_DB_NAME")
+
     try:
-        with urlopen(endpoint, timeout=5) as response:
-            metrics = response.read().decode("utf-8")
+        opener = build_opener(ProxyHandler({}))
+        with opener.open(endpoint, timeout=5) as response:
+            payload = json.load(response)
     except (URLError, TimeoutError) as error:
-        LOGGER.warning("Debezium snapshot metrics are unavailable: %s", error)
+        LOGGER.warning("Cannot read Debezium's saved offsets: %s", error)
         return False
-    for line in metrics.splitlines():
-        if line.startswith("debezium_snapshot_completed"):
-            try:
-                return float(line.rsplit(" ", 1)[1]) == 1.0
-            except (IndexError, ValueError):
-                raise RuntimeError(
-                    "Debezium snapshot completion metric is malformed."
-                )
-    raise RuntimeError(
-        "Debezium snapshot completion metric was not exported; check the "
-        "Kafka Connect JMX exporter configuration."
+
+    if (
+        not isinstance(payload, dict)
+        or not isinstance(payload.get("offsets"), list)
+    ):
+        raise RuntimeError(
+            "Kafka Connect returned an invalid offsets response."
+        )
+
+    matches = [
+        item.get("offset")
+        for item in payload["offsets"]
+        if isinstance(item, dict)
+        and isinstance(item.get("partition"), dict)
+        and item["partition"].get("server") == expected_server
+        and item["partition"].get("database") == expected_database
+    ]
+
+    if not matches or matches == [None]:
+        return False
+
+    if len(matches) != 1 or not isinstance(matches[0], dict):
+        raise RuntimeError(
+            "Expected one saved offset for the configured source."
+        )
+
+    offset = matches[0]
+
+    if not offset:
+        return False
+
+    if "snapshot" not in offset or "snapshot_completed" not in offset:
+        raise RuntimeError(
+            "Saved source offsets no longer contain explicit snapshot "
+            "completion evidence, and this generation has no saved "
+            "boundary. Verify the retained initial snapshot before "
+            "bootstrapping."
+        )
+
+    if (
+        type(offset["snapshot"]) is not bool
+        or type(offset["snapshot_completed"]) is not bool
+    ):
+        raise RuntimeError(
+            "Kafka Connect snapshot flags must be JSON booleans."
+        )
+
+    return (
+        offset["snapshot"] is True
+        and offset["snapshot_completed"] is True
+    )
+
+
+def _ensure_snapshot_boundary(
+    query_name: str,
+    generation_id: str,
+    connector_name: str,
+    timeout_seconds: int = 3600,
+) -> None:
+    """Save a confirmed Kafka boundary before starting the streaming query."""
+    connection = _staging_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT snapshot_boundary_captured
+                FROM metadata.streaming_generations
+                WHERE query_name = %s AND generation_id = %s
+                """,
+                (query_name, generation_id),
+            )
+            row = cursor.fetchone()
+    finally:
+        connection.close()
+
+    if row is None:
+        raise RuntimeError(
+            "The streaming generation metadata disappeared."
+        )
+
+    if row[0]:
+        LOGGER.info("Reusing the saved snapshot boundary.")
+        return
+
+    LOGGER.info(
+        "Waiting for Debezium to persist full-snapshot completion."
+    )
+    deadline = time.monotonic() + timeout_seconds
+
+    while not _snapshot_completed():
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                "Timed out waiting for confirmed snapshot completion."
+            )
+        time.sleep(5)
+
+    end_offsets = _snapshot_end_offsets()
+
+    if not end_offsets:
+        raise RuntimeError(
+            "No Debezium table partitions are available for bootstrap."
+        )
+
+    _persist_postgres_batch(
+        [],
+        query_name=query_name,
+        generation_id=generation_id,
+        connector_name=connector_name,
+        snapshot_end_offsets=end_offsets,
+    )
+
+    LOGGER.info(
+        "Saved snapshot boundary for %s Kafka partitions.",
+        len(end_offsets),
     )
 
 
@@ -340,16 +453,18 @@ def _persist_postgres_batch(
                             batch_id,
                         ),
                     )
-                was_inserted = cursor.fetchone() is not None
-                insert_delta, update_delta, delete_delta = (
+                    was_inserted = cursor.fetchone() is not None
+                    if was_inserted and event["source_table"] in SCD2_TABLES:
+                        _apply_scd2(cursor, event, Json)                    
+                    insert_delta, update_delta, delete_delta = (
                         persisted_operation_counts(
                             event["operation"],
                             inserted=was_inserted,
                         )
-                )
-                inserted += insert_delta
-                updated += update_delta
-                deleted += delete_delta
+                    )
+                    inserted += insert_delta
+                    updated += update_delta
+                    deleted += delete_delta
 
                 cursor.execute(
                     """
@@ -485,8 +600,17 @@ def run() -> None:
     if max_offsets <= 0:
         raise ValueError("STREAMING_MAX_OFFSETS_PER_TRIGGER must be positive.")
     Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
-    _validate_kafka_start(checkpoint_dir)
+
     generation_id = _get_or_create_generation(query_name, connector_name)
+
+    _ensure_snapshot_boundary(
+        query_name,
+        generation_id,
+        connector_name,
+    )
+
+    _validate_kafka_start(checkpoint_dir)
+    
     topic_pattern = _topic_pattern()
     spark = (
         SparkSession.builder.appName(app_name)
@@ -525,15 +649,12 @@ def run() -> None:
                 event["source_version"] = source_version_order(event)
                 events.append(event)
 
-            snapshot_end_offsets = (
-                _snapshot_end_offsets() if _snapshot_completed() else None
-            )
             publish_ready = _persist_postgres_batch(
                 events,
                 query_name=query_name,
                 generation_id=generation_id,
                 connector_name=connector_name,
-                snapshot_end_offsets=snapshot_end_offsets,
+                snapshot_end_offsets=None,
             )
             rows = [_clickhouse_row(generation_id, event) for event in events]
             _write_clickhouse_batch(spark, rows)

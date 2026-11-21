@@ -45,10 +45,10 @@ clickhouse-users:
 	docker compose exec -T clickhouse bash /opt/clickhouse-setup/create_clickhouse_users.sh
 
 warehouse-init:
-	docker compose exec -T clickhouse sh -ec 'clickhouse-client --user "$$CLICKHOUSE_USER" --password "$$CLICKHOUSE_PASSWORD" --database "$$WAREHOUSE_DB_NAME" --multiquery' < db/warehouse_clickhouse/warehouse_ddl.sql
+	docker compose exec -T clickhouse sh -ec 'clickhouse-client --port "$$CLICKHOUSE_NATIVE_PORT" --user "$$CLICKHOUSE_USER" --password "$$CLICKHOUSE_PASSWORD" --database "$$WAREHOUSE_DB_NAME" --multiquery' < db/warehouse_clickhouse/warehouse_ddl.sql
 
 cdc-warehouse-init:
-	docker compose exec -T clickhouse sh -ec 'clickhouse-client --user "$$CLICKHOUSE_USER" --password "$$CLICKHOUSE_PASSWORD" --database "$$WAREHOUSE_DB_NAME" --multiquery' < db/warehouse_clickhouse/cdc_warehouse_ddl.sql
+	docker compose exec -T clickhouse sh -ec 'clickhouse-client --port "$$CLICKHOUSE_NATIVE_PORT" --user "$$CLICKHOUSE_USER" --password "$$CLICKHOUSE_PASSWORD" --database "$$WAREHOUSE_DB_NAME" --multiquery' < db/warehouse_clickhouse/cdc_warehouse_ddl.sql
 
 warehouse-load: warehouse-init
 	docker compose --profile batch run --rm spark-warehouse
@@ -63,4 +63,4 @@ test:
 	PYTHONPATH=airflow/dags $(PYTHON) -m unittest discover -s tests/unit -v
 
 down:
-	docker compose down
+	docker compose --profile '*' down
