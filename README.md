@@ -1,65 +1,89 @@
 # Student Data Engineering Platform
 
-This local data engineering project turns student and academic records from SQL Server into two analytical products. **CDC serves the live Grafana dashboard. Batch produces independently verified snapshots for analysis, recovery and reconciliation.** Running a batch snapshot is an operator decision by default.
+A local data engineering project that turns student, admissions and course activity from SQL Server into analytical data products. It answers questions such as how enrollment compares with offered capacity, how applications vary by entry term, and how grade coverage changes across departments.
+
+**Batch** publishes independently validated dimensional snapshots for historical analysis and reconciliation. **CDC** captures changes and serves current source totals in Grafana. The two paths share a source and a ClickHouse server while keeping their processing, databases and publication state separate.
+
+## Architecture
 
 ```mermaid
 flowchart LR
-    SQL[(External SQL Server)]
-    SQL --> A[Airflow snapshot]
-    A --> P[(PostgreSQL raw staging)]
-    A -. Validated run ID .-> B[Airflow and Spark Batch]
-    P --> B
-    B --> W[(ClickHouse batch warehouse)]
-    SQL --> D[Debezium on Kafka Connect]
-    D --> K[(Kafka)]
-    K --> S[Spark Structured Streaming]
-    S <--> C[(Persistent checkpoint)]
-    S --> L[(ClickHouse CDC database)]
-    W --> G[Grafana batch analysis]
-    L --> H[Grafana live analytics]
+    SRC[(SQL Server)]
+    SRC --> EX["Airflow snapshot"]
+    EX --> PG[(PostgreSQL staging)]
+    EX -.->|"Exact staging run ID"| AF["Airflow warehouse DAG"]
+    AF --> SB["Spark Batch"]
+    PG --> SB
+    SB --> WB[(ClickHouse batch)]
+    SRC --> DC["Debezium on Kafka Connect"]
+    DC --> KF[(Kafka)]
+    KF --> SS["Spark Structured Streaming"]
+    SS <--> CP[(Persistent checkpoint)]
+    SS --> CW[(ClickHouse CDC)]
+    WB --> GB["Grafana batch analytics"]
+    CW --> GC["Grafana live analytics"]
+    WB -.-> RC["Count reconciliation"]
+    CW -.-> RC
 ```
+
+- **Batch:** Airflow extracts 15 tables inside a SQL Server snapshot transaction and reconciles source, fetched and persisted counts. It hands the validated staging run ID to the warehouse DAG. Spark reads that exact run, builds nine dimensions and three facts, and publishes the candidate only after checking the ClickHouse writes. [Batch pipeline](docs/04-data-pipelines/batch.md) · [Database models](docs/02-architecture/data-model.md)
+- **CDC:** Debezium captures an initial snapshot and subsequent changes. Spark consumes the retained Kafka log, verifies and seals microbatches, and saves progress in a persistent checkpoint. ClickHouse serves the active generation, resolves updates and deletes by source version, and aggregates the latest source rows for Grafana. [CDC pipeline](docs/04-data-pipelines/cdc.md)
+- **Quality and recovery:** A failed batch candidate leaves the preceding snapshot visible. CDC can verify a replayed sealed batch using its recorded contents and checkpoint identity. Reconciliation compares applications, offerings and enrollment attempts and reports both publication references so an operator can distinguish timing differences from data defects. [Reconciliation](docs/04-data-pipelines/reconciliation.md) · [Operations](docs/07-operations/runbook.md)
+
+## Technology stack
+
+| Technology | Project responsibility |
+|---|---|
+| SQL Server and PostgreSQL 16 | External system of record and transaction-consistent extracts. PostgreSQL preserves typed staging batches and Airflow metadata. |
+| Airflow 3.1.5, Python and SQL | Run-scoped orchestration, ingestion, validation and warehouse logic. |
+| Kafka 3.9.1 and Debezium 2.7.3 on Connect | Partitioned, retained change data, connector lifecycle and source offsets. |
+| Spark 3.5.6 | Batch joins and dimensional transforms, plus independent checkpointed microbatches for CDC. |
+| ClickHouse 24.8 | Columnar batch warehouse and a separate CDC database with explicit publication markers. |
+| Grafana 11.5.2 | Provisioned batch analytics and live CDC business totals, progress and freshness. |
+| Docker Compose on Linux/WSL2 | Pinned local services, profile-specific startup and persistent volumes. |
 
 ## Run locally
 
-You need Docker with Compose v2, Python 3.11 or 3.12, and access to the external SQL Server source. The test environment uses Airflow 3.1.5, Spark 3.5.6, PostgreSQL 16, ClickHouse 24.8, Kafka 3.9.1, Debezium 2.7.3 and Grafana 11.5.2. Builds and the first Spark run need registry and Maven access.
+Use Docker with Compose v2, Python 3.11 or 3.12 and an approved SQL Server reader. Setup needs registry, package index and Maven access. Keep the project on the Linux filesystem when using WSL2.
 
 ```bash
 make install
 make init
-# Fill in the SQL Server settings in the private .env file.
+# Configure the SQL Server endpoint, TLS and approved reader in the private .env file.
 make compose-config
 make test
 ```
 
-Use `.env.example` as the configuration reference. `make init` creates `.env` when needed and generates local passwords. SQL Server credentials come from the DBA. See the [runbook](docs/10-operations/operational-runbook.md) before enabling CDC on a source or upgrading existing volumes.
+[.env.example](.env.example) lists the variables. `make init` generates missing local credentials. Preserve them with the volumes. Check source snapshot isolation for batch, and confirm SQL Server capture jobs, expected instances and retention before CDC startup. See [setup](docs/03-infrastructure/setup.md) and [source readiness](docs/05-data-platform/source-and-staging.md).
 
-| Need | Command or action |
+| Task | Command or action |
 |---|---|
-| Start batch and Grafana | `make up`, then unpause the two batch DAGs in Airflow and trigger `sqlserver_to_postgres_staging` |
-| Retry a warehouse publication | `make warehouse-load RUN_ID=123`, using the successful staging run ID |
-| Start live CDC and Grafana | After source readiness checks, run `make streaming-up` |
-| Compare published counts | `make reconcile` once both pipelines have published |
-| Inspect health | `make status` and `make logs` |
-| Stop the stack | `make down`, which preserves named volumes |
+| Start and run batch | `make up`. In Airflow unpause both batch DAGs and trigger `sqlserver_to_postgres_staging`. |
+| Retry the warehouse step | `make warehouse-load RUN_ID=123` with the eligible staging run ID. |
+| Start CDC and Grafana | `make streaming-up` after source readiness checks. |
+| Compare counts and inspect services | `make reconcile` after both publish. Inspect `make status` and `make logs`. |
+| Stop local services | `make down` keeps named volumes. |
 
-The default local interfaces are [Airflow](http://localhost:18080) and [Grafana](http://localhost:13000). Open **Live Student Analytics — CDC** for current source counts, seat capacity, recorded grades, and stream progress. The **Batch Snapshot** dashboard uses the published dimensional model by term and department.
+Default local interfaces are [Airflow](http://localhost:18080) and [Grafana](http://localhost:13000). Use **Live Student Analytics — CDC** for current totals and progress. Use **Batch Snapshot — Student Enrollment, Capacity & Grades** for term and department slicing, application status and grade measures. [KPI definitions](docs/06-observability-and-quality/grafana.md)
 
-The historical batch dashboard captures show [enrollment](docs/14-screenshots/07-grafana-overview.png), [capacity and admissions](docs/14-screenshots/07b-grafana-capacity-admissions.png), and [grades](docs/14-screenshots/08-grafana-grades.png).
+## Evidence and current status
 
-## How the pipelines work
+On 22 November 2026, the local CDC generation was active with **4,623,487 verified bootstrap records** and zero offsets behind at the last sealed batch. Published batch run 2 and active CDC matched on **600,000 applications**, **59,279 offerings** and **3,724,654 enrollment attempts**. Twenty-five unit tests and isolated batch, replay and publication checks are recorded. The external-source acceptance still requires a fresh full run through the current Airflow handoff and controlled source changes on an authorized fixture. SQL Server Agent and cleanup retention also require DBA confirmation.
 
-- **Batch** reads 15 tables in a single SQL Server snapshot transaction. It reconciles each extracted and staged count before Airflow passes the staging run ID to Spark. Spark validates the dimensional model, checks what ClickHouse stored, and publishes the snapshot through a final marker.
-- **CDC** consumes Debezium’s completed baseline and subsequent source changes. Spark verifies Kafka positions in ClickHouse before committing a microbatch. The event view deduplicates logical changes and the current-state model applies the latest source version, including deletes. Kafka and Spark persist separate recovery state.
-- **Reconciliation** compares applications, offerings and enrollments at the same business grain and reports both publication references. A delta can reflect data changed after the batch snapshot. The comparison is read-only and neither pipeline depends on it.
+The stack runs on a single host. Kafka and SQL Server retention bound replay, and host-loss recovery requires compatible backups of Kafka, Spark checkpoints and databases. [Validation and limitations](docs/06-observability-and-quality/testing-and-validation.md)
 
-## Project files
+![Historical Grafana batch dashboard showing enrollment by term and department](docs/assets/screenshots/batch-enrollment-history.png)
 
-| Path | Contents |
+The capture shows the batch dashboard’s enrollment breakdowns. The [visual gallery](docs/assets/README.md) dates and classifies execution evidence and links to the current diagrams.
+
+## Repository and documentation
+
+| Path | What to find |
 |---|---|
-| `airflow/` and `spark/` | Batch DAGs and loaders, transformations and CDC processing |
-| `db/` | Source assessment, DBA scripts, PostgreSQL staging and both ClickHouse models |
-| `debezium/`, `clickhouse/`, `grafana/` | Service configuration, connector registration and dashboards |
-| `scripts/` and `tests/` | Bootstrap, provisioning, unit tests and isolated integration fixtures |
-| `docs/` | Architecture, data model, operations, tests, decisions and validation evidence |
+| `airflow/` and `spark/` | Orchestration, typed ingestion, batch transformations and streaming |
+| `db/` | Source assessment and readiness, PostgreSQL staging, ClickHouse DDL and reconciliation |
+| `debezium/`, `clickhouse/` and `grafana/` | Connector registration, analytical database configuration and dashboards |
+| `scripts/` and `tests/` | Setup and provisioning commands, unit tests and disposable integration fixtures |
+| [Documentation](docs/README.md) | Seven sections from foundations to operations, with engineering decisions and visual evidence |
 
-This is a single-host deployment. Retention bounds replay, and volumes must be backed up separately for host-loss recovery. The [architecture](docs/02-architecture/architecture-overview.md), [data model](docs/02-architecture/data-model.md), [test guide](docs/09-development-and-testing/integration-testing.md), and [implementation status](docs/12-implementation/implementation-status.md) document the limits and the evidence.
+Start with the [foundation guide](docs/01-foundation/data-engineering.md), then follow the [architecture](docs/02-architecture/overview.md), [engineering decisions](docs/02-architecture/decisions.md) and [runbook](docs/07-operations/runbook.md).

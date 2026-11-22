@@ -2,6 +2,12 @@ PYTHON ?= $(shell if test -x .venv/bin/python; then echo .venv/bin/python; else 
 CDC_TABLES = $(shell PYTHONPATH=airflow/dags $(PYTHON) -B -c 'from students_staging.source_tables import SOURCE_TABLES; print(" ".join(table for table, _ in SOURCE_TABLES))')
 export RUN_ID
 
+define check-init
+container=$$(docker compose $(1) ps --all --quiet $(2)) && \
+test -n "$$container" && status=$$(docker wait "$$container") && \
+{ test "$$status" = 0 || { printf '%s exited with status %s\n' '$(2)' "$$status" >&2; exit 1; }; }
+endef
+
 .PHONY: init install compose-config up up-core up-batch up-pipeline cdc-up streaming-up dashboards-up status logs test warehouse-load reconcile down
 
 init:
@@ -17,7 +23,8 @@ up: up-pipeline
 
 up-core: init
 	docker compose up -d staging-schema-init clickhouse-init
-	docker compose wait staging-schema-init clickhouse-init
+	@$(call check-init,,staging-schema-init)
+	@$(call check-init,,clickhouse-init)
 
 up-batch: init
 	$(PYTHON) scripts/validate_environment.py --mode batch
@@ -31,7 +38,7 @@ cdc-up: init
 	docker compose --profile cdc up -d --build --wait kafka connect
 	docker compose --profile cdc exec -T kafka bash /opt/platform/prepare_cdc_topics.sh $(CDC_TABLES)
 	docker compose --profile cdc up -d debezium-register
-	docker compose --profile cdc wait debezium-register
+	@$(call check-init,--profile cdc,debezium-register)
 
 streaming-up: cdc-up
 	docker compose --profile cdc --profile streaming up -d --build --wait spark-cdc-stream grafana

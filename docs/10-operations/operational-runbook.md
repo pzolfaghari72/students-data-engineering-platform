@@ -34,12 +34,19 @@ Run `make streaming-up` after readiness. The data topics use the configured part
 
 Use **Live Student Analytics — CDC** for generation state, verified bootstrap progress, and sampled lag. The Connect REST status and Spark logs distinguish an idle source from a stopped query. Lag and live processing delay are sampled at successful microbatches. A bootstrap can finish after the broker already has some live records. A generation stays hidden until ClickHouse has verified the complete saved cut.
 
-On a small host, avoid running full bootstrap, batch backfills and load tests concurrently. The dashboard reader limits query threads and can spill large aggregations to disk at the threshold configured by `CLICKHOUSE_DASHBOARD_GROUP_BY_BYTES`.
+On a small host, avoid running full bootstrap, batch backfills and load tests concurrently. The dashboard reader and CDC writer limit query threads and can spill large aggregations to disk at the threshold configured by `CLICKHOUSE_DASHBOARD_GROUP_BY_BYTES`.
 
 - **Ordinary restart.** Restart the same Spark service with the same generation name, topic IDs, checkpoint directory and ClickHouse database. Spark can retry an uncommitted callback automatically. An existing sealed batch is verified on replay. Avoid resetting a checkpoint to clear a routine error.
 - **Retention or restore mismatch.** Compare Kafka beginning and end offsets, Spark checkpoint identity, and the ClickHouse commit ledger. Restore compatible state if available. Otherwise use a new connector/topic/checkpoint lineage and take a fresh baseline. Keep the last good published generation until the replacement passes reconciliation.
 - **Schema evolution.** A compatible payload field addition remains in the raw envelope. Validate changes to the source key, event structure or KPI fields before rollout. Coordinate unsupported changes with the DBA using SQL Server’s capture-instance transition and preserve schema history.
 - **Upgrade from the PostgreSQL-backed stream.** Capture the previous connector, source topic IDs and offsets, and the old generation’s health. Stop the old Spark writer in the maintenance window before applying the narrowed legacy warehouse grants. Replay verified Kafka offsets into the dedicated CDC database using a new checkpoint path. If the full baseline is unavailable, create a new connector name, topic prefix and schema-history topic with an approved initial snapshot. Promote Grafana with the new stack after the generation is verified. Keep the legacy checkpoint, PostgreSQL CDC objects, old ClickHouse events and Kafka lineage until dependency and rollback checks permit removal.
+
+On upgraded installations, check that the Spark user can write to the root of the existing checkpoint volume. If an older volume is root-owned, correct only the mount directory while the worker is stopped.
+
+```bash
+docker compose --profile cdc --profile streaming run -T --rm --no-deps \
+  --user root --entrypoint chown spark-cdc-stream spark:spark /opt/spark/checkpoints
+```
 
 ## Reconciliation and local persistence
 

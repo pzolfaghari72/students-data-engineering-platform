@@ -41,6 +41,7 @@ client --database "$CDC_DB_NAME" < /warehouse_ddl/cdc_warehouse_ddl.sql
     printf 'CREATE ROLE IF NOT EXISTS warehouse_etl_role IN local_directory;\n'
     printf 'CREATE ROLE IF NOT EXISTS warehouse_readonly_role IN local_directory;\n'
     printf 'CREATE ROLE IF NOT EXISTS cdc_writer_role IN local_directory;\n'
+    printf 'ALTER ROLE cdc_writer_role SETTINGS max_bytes_before_external_group_by = %s, max_threads = 2;\n' "$group_by_limit"
     printf 'REVOKE ALL ON `%s`.* FROM warehouse_etl_role;\n' "$WAREHOUSE_DB_NAME"
     printf 'REVOKE SELECT ON `%s`.* FROM warehouse_readonly_role;\n' "$WAREHOUSE_DB_NAME"
 

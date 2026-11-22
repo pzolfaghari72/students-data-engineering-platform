@@ -228,7 +228,7 @@ class ClickHouseCDC:
                 "SELECT 1 FROM cdc_committed_records "
                 "WHERE generation_id = {generation:String} AND operation = 'r' "
                 "AND commit_lsn = {baseline:String} GROUP BY source_table, source_key "
-                "HAVING uniqExact(after_image) > 1 LIMIT 1",
+                "HAVING min(after_image) != max(after_image) LIMIT 1",
                 baseline=baseline,
             )
             if conflicts:

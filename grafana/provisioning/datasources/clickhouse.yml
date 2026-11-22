@@ -1,7 +1,7 @@
 apiVersion: 1
 
 datasources:
-  - name: Students Batch Warehouse
+  - name: Students Warehouse
     uid: students-warehouse
     type: grafana-clickhouse-datasource
     access: proxy
