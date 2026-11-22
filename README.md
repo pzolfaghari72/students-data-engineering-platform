@@ -100,9 +100,25 @@ CDC event metrics use sealed live changes in the active generation and exclude s
 
 `make reconcile` reports signed differences as **CDC minus Batch** for the three shared measures. Equal counts support count parity at the observed boundaries. Compare timestamps and recent operations to explain a difference. [Reconciliation and quality checks](docs/04-data-pipelines/reconciliation.md) · [Tests and dated runtime evidence](docs/06-observability-and-quality/testing-and-validation.md)
 
-![Grafana showing a published CDC generation and Batch snapshot in an earlier deployment](docs/assets/screenshots/grafana-live-cdc-publication.png)
+### Batch dashboard
 
-This 22 November 2026 capture predates the live operation panels and records an earlier deployment. See the gallery for the Airflow DAG graph, source ERD and screenshot provenance. [Visual evidence](docs/assets/README.md)
+#### Enrollment overview
+
+![Grafana Batch dashboard showing enrollment totals and enrollment by term and department](docs/assets/screenshots/batch-enrollment-history.png)
+
+#### Capacity and admissions
+
+![Grafana Batch dashboard showing capacity by department and applications by status and entry term](docs/assets/screenshots/batch-capacity-admissions-history.png)
+
+#### Grade analytics
+
+![Grafana Batch dashboard showing grade coverage, grade distribution and credit-weighted grade points](docs/assets/screenshots/batch-grades-history.png)
+
+### Live CDC dashboard
+
+![Grafana CDC dashboard showing an active generation, a processed student update and Batch run 1](docs/assets/screenshots/grafana-live-cdc-publication.png)
+
+The capture shows a completed CDC bootstrap and a verified student update. The gallery also includes the Airflow DAG graph and source ERD. [Visual evidence](docs/assets/README.md)
 
 ## Limitations and recovery
 
