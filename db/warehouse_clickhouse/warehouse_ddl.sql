@@ -24,6 +24,7 @@ ALTER TABLE warehouse_model_loads
 ALTER TABLE warehouse_model_loads
     ADD COLUMN IF NOT EXISTS snapshot_started_at Nullable(DateTime64(3, 'UTC'));
 
+-- Prefer the latest source run, even when an older run is published later.
 CREATE OR REPLACE VIEW batch_publication_status SQL SECURITY DEFINER AS
 SELECT snapshot_id, source_run_id, snapshot_started_at, completed_at,
        fact_application_rows, fact_course_offering_rows, fact_enrollment_rows

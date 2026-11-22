@@ -5,13 +5,15 @@ from __future__ import annotations
 import logging
 import os
 from datetime import UTC, datetime
+from io import StringIO
 from typing import Any
 
 import psycopg2
 import pyodbc
 from airflow.exceptions import AirflowException
 from psycopg2 import sql
-from psycopg2.extras import Json, execute_values
+from psycopg2.errors import UndefinedColumn, UndefinedTable
+from psycopg2.extras import Json
 
 from students_staging.source_tables import SOURCE_TABLES
 
@@ -80,6 +82,16 @@ def _quote_sqlserver_identifier(identifier: str) -> str:
     return "[" + identifier.replace("]", "]]") + "]"
 
 
+def _copy_field(value: Any) -> str:
+    """Encode a scalar for PostgreSQL's text COPY format."""
+    if value is None:
+        return r"\N"
+    return (
+        str(value).replace("\\", r"\\").replace("\t", r"\t")
+        .replace("\n", r"\n").replace("\r", r"\r")
+    )
+
+
 def _run_id_from_context(context: dict[str, Any]) -> int:
     """Read the pipeline run ID created by the start task."""
     run_id = context["ti"].xcom_pull(task_ids="create_pipeline_run")
@@ -93,6 +105,13 @@ def create_pipeline_run(**context: Any) -> int:
     connection = _staging_connection()
     try:
         with connection.cursor() as cursor:
+            try:
+                cursor.execute("SELECT source_rows_expected FROM metadata.extraction_batches LIMIT 0")
+            except (UndefinedColumn, UndefinedTable) as error:
+                raise AirflowException(
+                    "Staging metadata schema is out of date. Run the staging-schema-init "
+                    "Compose service before retrying the snapshot."
+                ) from error
             cursor.execute(
                 """
                 INSERT INTO metadata.pipeline_runs
@@ -134,7 +153,7 @@ def load_source_table(
     extracted_at = datetime.now(UTC)
 
     try:
-        # Create the batch first so even a source connection failure is traceable.
+        # Record the batch before reading the table so a failed read is traceable.
         with target_connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -183,8 +202,8 @@ def load_source_table(
 
         source_columns = [column[0] for column in source_cursor.description]
         insert_columns = source_columns + ["_batch_id", "_extracted_at"]
-        insert_statement = sql.SQL(
-            "INSERT INTO {}.{} ({}) VALUES %s"
+        copy_statement = sql.SQL(
+            "COPY {}.{} ({}) FROM STDIN"
         ).format(
             sql.Identifier("raw"),
             sql.Identifier(target_table),
@@ -196,18 +215,16 @@ def load_source_table(
             if not source_rows:
                 break
 
-            target_rows = [
-                tuple(row) + (batch_id, extracted_at)
-                for row in source_rows
-            ]
+            # Bound the COPY buffer while keeping each chunk and its counters atomic.
+            buffer = StringIO()
+            for row in source_rows:
+                fields = (*row, batch_id, extracted_at)
+                buffer.write("\t".join(map(_copy_field, fields)) + "\n")
+            buffer.seek(0)
+            row_count = len(source_rows)
             try:
                 with target_connection.cursor() as cursor:
-                    execute_values(
-                        cursor,
-                        insert_statement,
-                        target_rows,
-                        page_size=1_000,
-                    )
+                    cursor.copy_expert(copy_statement, buffer)
                     cursor.execute(
                         """
                         UPDATE metadata.extraction_batches
@@ -215,15 +232,15 @@ def load_source_table(
                             inserted_rows = inserted_rows + %s
                         WHERE batch_id = %s
                         """,
-                        (len(target_rows), len(target_rows), batch_id),
+                        (row_count, row_count, batch_id),
                     )
                 target_connection.commit()
             except Exception:
                 target_connection.rollback()
                 raise
 
-            loaded_rows += len(target_rows)
-            if loaded_rows % LOG_EVERY_ROWS < len(target_rows):
+            loaded_rows += row_count
+            if loaded_rows % LOG_EVERY_ROWS < row_count:
                 LOGGER.info(
                     "Loaded %s rows from %s.%s (batch_id=%s)",
                     loaded_rows,
@@ -352,12 +369,14 @@ def load_consistent_snapshot(**context: Any) -> list[dict[str, int | str]]:
     results: list[dict[str, int | str]] = []
     connection = None
     try:
-        connection = pyodbc.connect(_sqlserver_connection_string(), autocommit=False)
+        connection = pyodbc.connect(_sqlserver_connection_string(), autocommit=True)
         with connection.cursor() as cursor:
             cursor.execute(
                 f"SET TRANSACTION ISOLATION LEVEL "
                 f"{_required_env('SOURCE_DB_SNAPSHOT_ISOLATION')}"
             )
+        # Set the session's isolation before ODBC opens the source transaction.
+        connection.autocommit = False
         for source_table, target_table in SOURCE_TABLES:
             results.append(
                 load_source_table(

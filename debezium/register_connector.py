@@ -191,6 +191,7 @@ def register_connector() -> None:
         raise ValueError("CONNECTOR_HEALTH_TIMEOUT_SECONDS must be positive.")
     connector_name, _, config = _connector_config()
     _wait_for_connect(rest_url, timeout_seconds)
+    # Reuse the registered connector so its durable offset remains authoritative.
     existing = _existing_connector_config(rest_url, connector_name)
     if existing is not None:
         check_existing_config(existing, config)

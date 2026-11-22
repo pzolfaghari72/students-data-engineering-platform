@@ -195,6 +195,7 @@ class ClickHouseCDC:
         if {tuple(row) for row in actual} != {(*position, record_hash) for position, record_hash in hashes.items()}:
             raise RuntimeError(f"Stored ClickHouse records failed verification for batch {batch_id}.")
 
+        # A sealed batch can serve before Spark commits its offsets.
         if not existing:
             live_source_time = max((row[-2] for row in rows if row[7] in {"c", "u", "d"}), default=0)
             self.client.insert(
@@ -282,6 +283,7 @@ def run_stream(config, checkpoint):
                     config["CONNECT_REST_URL"], connector, prefix, database,
                     int(config["STREAMING_BOOTSTRAP_TIMEOUT_SECONDS"]),
                 )
+                # Freeze a replay boundary only after Connect reports baseline completion.
                 beginnings, boundary = kafka_bounds(consumer, partitions)
                 if any(beginnings.values()):
                     raise RuntimeError("The full initial Kafka snapshot is no longer retained.")
@@ -297,6 +299,7 @@ def run_stream(config, checkpoint):
                 raise RuntimeError("Kafka does not retain the saved CDC continuation offsets.")
             if sealed_batch >= 0:
                 store.verify_prefix(offsets)
+            # Recover activation if a prior worker sealed the baseline before stopping.
             store.publish_if_ready(boundary, offsets, baseline)
 
             def process(frame, batch_id):

@@ -62,6 +62,7 @@ SELECT *
 FROM cdc_events
 WHERE (generation_id, batch_id) IN (SELECT generation_id, batch_id FROM cdc_batch_commits);
 
+-- Serve the active baseline and its committed live changes.
 CREATE OR REPLACE VIEW cdc_serving_records AS
 SELECT events.*
 FROM cdc_committed_records AS events
@@ -69,6 +70,7 @@ INNER JOIN cdc_active_generation AS active ON events.generation_id = active.gene
 WHERE (events.operation = 'r' AND events.commit_lsn = active.baseline_lsn)
    OR (events.operation IN ('c', 'u', 'd') AND events.commit_lsn >= active.baseline_lsn);
 
+-- Replays at new Kafka offsets still represent the same source change.
 CREATE OR REPLACE VIEW cdc_logical_events AS
 SELECT
     generation_id,

@@ -8,7 +8,7 @@
   ],
   "editable": false,
   "timezone": "utc",
-  "refresh": "30s",
+  "refresh": "1m",
   "time": {
     "from": "now-15m",
     "to": "now"
@@ -106,6 +106,305 @@
       "description": "Lag is sampled when Spark seals a batch. During source inactivity, verify the Spark query and Connect task with the runbook."
     },
     {
+      "id": 4,
+      "title": "Live CDC Events — INSERT / UPDATE / DELETE",
+      "type": "stat",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-cdc"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 24,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-cdc"
+          },
+          "rawSql": "WITH batch_seals AS\n(\n    SELECT generation_id, batch_id, min(verified_at) AS sealed_at\n    FROM cdc_batch_commits\n    WHERE generation_id IN (SELECT generation_id FROM cdc_active_generation)\n    GROUP BY generation_id, batch_id\n),\nlive_events AS\n(\n    SELECT e.source_table AS source_table, e.source_key AS source_key,\n           e.source_version AS source_version, e.operation AS operation,\n           min(s.sealed_at) AS processed_at,\n           fromUnixTimestamp64Milli(toInt64(nullIf(argMin(e.source_time_ms,\n               tuple(s.sealed_at, e.kafka_topic, e.kafka_partition, e.kafka_offset)), 0)), 'UTC') AS event_at\n    FROM cdc_serving_records AS e\n    INNER JOIN batch_seals AS s ON e.generation_id = s.generation_id AND e.batch_id = s.batch_id\n    WHERE e.operation IN ('c', 'u', 'd')\n    GROUP BY e.source_table, e.source_key, e.source_version, e.operation\n)\nSELECT countIf(operation = 'c') AS INSERT,\n       countIf(operation = 'u') AS UPDATE,\n       countIf(operation = 'd') AS DELETE,\n       round(60000.0 * count() / nullIf(dateDiff('millisecond', $__fromTime_ms, $__toTime_ms), 0), 2)\n           AS `Events / min`\nFROM live_events\nWHERE $__timeFilter_ms(processed_at)\nHAVING (SELECT count() FROM cdc_active_generation) > 0",
+          "queryType": "table",
+          "format": 1,
+          "editorType": "sql"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No active CDC publication"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "INSERT"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "UPDATE"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "DELETE"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Events / min"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "orientation": "horizontal"
+      },
+      "description": "Verified changes first processed during the selected time range. The rate is the average per minute across that range."
+    },
+    {
+      "id": 5,
+      "title": "CDC Events Over Time",
+      "type": "timeseries",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-cdc"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 24,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-cdc"
+          },
+          "rawSql": "WITH batch_seals AS\n(\n    SELECT generation_id, batch_id, min(verified_at) AS sealed_at\n    FROM cdc_batch_commits\n    WHERE generation_id IN (SELECT generation_id FROM cdc_active_generation)\n    GROUP BY generation_id, batch_id\n),\nlive_events AS\n(\n    SELECT e.source_table AS source_table, e.source_key AS source_key,\n           e.source_version AS source_version, e.operation AS operation,\n           min(s.sealed_at) AS processed_at,\n           fromUnixTimestamp64Milli(toInt64(nullIf(argMin(e.source_time_ms,\n               tuple(s.sealed_at, e.kafka_topic, e.kafka_partition, e.kafka_offset)), 0)), 'UTC') AS event_at\n    FROM cdc_serving_records AS e\n    INNER JOIN batch_seals AS s ON e.generation_id = s.generation_id AND e.batch_id = s.batch_id\n    WHERE e.operation IN ('c', 'u', 'd')\n    GROUP BY e.source_table, e.source_key, e.source_version, e.operation\n)\nSELECT $__timeInterval(processed_at) AS time,\n       countIf(operation = 'c') AS INSERT,\n       countIf(operation = 'u') AS UPDATE,\n       countIf(operation = 'd') AS DELETE\nFROM live_events\nWHERE $__timeFilter_ms(processed_at)\nGROUP BY time\nORDER BY time",
+          "queryType": "timeseries",
+          "format": 0,
+          "editorType": "sql"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "decimals": 0,
+          "noValue": "No verified changes in this time range",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 72,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "INSERT"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "UPDATE"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "DELETE"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "description": "Verified operations grouped by their first Spark batch seal time. Each bar is the event count for its interval.",
+      "interval": "30s",
+      "maxDataPoints": 500
+    },
+    {
+      "id": 6,
+      "title": "Latest CDC Changes",
+      "type": "table",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-cdc"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 24,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-cdc"
+          },
+          "rawSql": "WITH batch_seals AS\n(\n    SELECT generation_id, batch_id, min(verified_at) AS sealed_at\n    FROM cdc_batch_commits\n    WHERE generation_id IN (SELECT generation_id FROM cdc_active_generation)\n    GROUP BY generation_id, batch_id\n),\nlive_events AS\n(\n    SELECT e.source_table AS source_table, e.source_key AS source_key,\n           e.source_version AS source_version, e.operation AS operation,\n           min(s.sealed_at) AS processed_at,\n           fromUnixTimestamp64Milli(toInt64(nullIf(argMin(e.source_time_ms,\n               tuple(s.sealed_at, e.kafka_topic, e.kafka_partition, e.kafka_offset)), 0)), 'UTC') AS event_at\n    FROM cdc_serving_records AS e\n    INNER JOIN batch_seals AS s ON e.generation_id = s.generation_id AND e.batch_id = s.batch_id\n    WHERE e.operation IN ('c', 'u', 'd')\n    GROUP BY e.source_table, e.source_key, e.source_version, e.operation\n)\nSELECT event_at AS `Event Timestamp`, source_table AS `Table Name`,\n       multiIf(operation = 'c', 'INSERT', operation = 'u', 'UPDATE', 'DELETE') AS Operation,\n       if(source_table IN ('ClassStandings', 'CourseOfferings', 'Courses', 'DegreeLevels',\n                           'DegreeRequirements', 'Degrees', 'DegreeTypes', 'Departments',\n                           'Grades', 'Sessions', 'Terms'), source_key, 'Hidden') AS `Primary Key`,\n       processed_at AS `Processing Timestamp`\nFROM live_events\nORDER BY processed_at DESC, source_version DESC, source_table, source_key, operation\nLIMIT 25",
+          "queryType": "table",
+          "format": 1,
+          "editorType": "sql"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "—"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "description": "Most recent 25 verified changes in the active generation. Keys for people-related tables are hidden. The event timestamp comes from stored Debezium metadata and can be unavailable."
+    },
+    {
+      "id": 7,
+      "title": "CDC processing activity",
+      "type": "table",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-cdc"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 35,
+        "w": 24,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-cdc"
+          },
+          "rawSql": "WITH batch_seals AS\n(\n    SELECT generation_id, batch_id, min(verified_at) AS sealed_at\n    FROM cdc_batch_commits\n    WHERE generation_id IN (SELECT generation_id FROM cdc_active_generation)\n    GROUP BY generation_id, batch_id\n),\nlive_events AS\n(\n    SELECT e.source_table AS source_table, e.source_key AS source_key,\n           e.source_version AS source_version, e.operation AS operation,\n           min(s.sealed_at) AS processed_at,\n           fromUnixTimestamp64Milli(toInt64(nullIf(argMin(e.source_time_ms,\n               tuple(s.sealed_at, e.kafka_topic, e.kafka_partition, e.kafka_offset)), 0)), 'UTC') AS event_at\n    FROM cdc_serving_records AS e\n    INNER JOIN batch_seals AS s ON e.generation_id = s.generation_id AND e.batch_id = s.batch_id\n    WHERE e.operation IN ('c', 'u', 'd')\n    GROUP BY e.source_table, e.source_key, e.source_version, e.operation\n)\nSELECT total AS `Total processed live events`,\n       last_processed AS `Last processed event timestamp`,\n       if(last_event_at <= last_processed,\n          dateDiff('millisecond', last_event_at, last_processed), NULL) AS `Latest event-to-seal delay`\nFROM\n(\n    SELECT count() AS total, maxOrNull(processed_at) AS last_processed,\n           tupleElement(argMax(tuple(event_at),\n               tuple(processed_at, source_version, source_table, source_key, operation)), 1) AS last_event_at\n    FROM live_events\n)\nWHERE (SELECT count() FROM cdc_active_generation) > 0",
+          "queryType": "table",
+          "format": 1,
+          "editorType": "sql"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "—"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Latest event-to-seal delay"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true
+      },
+      "description": "Lifetime metrics for verified live changes in the active generation. Delay compares the stored Debezium event time with the first Spark batch seal. Sampled Kafka backlog is shown under CDC progress and freshness."
+    },
+    {
       "id": 3,
       "title": "Latest batch publication",
       "type": "table",
@@ -115,7 +414,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 12,
+        "y": 40,
         "w": 24,
         "h": 5
       },

@@ -12,12 +12,15 @@ def load_extraction_module():
     # Host unit tests do not install the Airflow image's providers or DB clients.
     psycopg2 = ModuleType("psycopg2")
     psycopg2.sql = Mock()
+    pg_errors = ModuleType("psycopg2.errors")
+    pg_errors.UndefinedColumn = type("UndefinedColumn", (Exception,), {})
+    pg_errors.UndefinedTable = type("UndefinedTable", (Exception,), {})
     extras = ModuleType("psycopg2.extras")
-    extras.Json, extras.execute_values = Mock(), Mock()
+    extras.Json = Mock()
     airflow_errors = ModuleType("airflow.exceptions")
     airflow_errors.AirflowException = RuntimeError
     dependencies = {
-        "psycopg2": psycopg2, "psycopg2.extras": extras,
+        "psycopg2": psycopg2, "psycopg2.errors": pg_errors, "psycopg2.extras": extras,
         "pyodbc": ModuleType("pyodbc"), "airflow.exceptions": airflow_errors,
     }
     filename = Path(__file__).resolve().parents[2] / "airflow/dags/students_staging/loader.py"
@@ -44,6 +47,51 @@ class SnapshotFinalizationTests(unittest.TestCase):
         task = Mock()
         task.xcom_pull.side_effect = [42, manifest]
         return self.loader.finish_pipeline_run(ti=task)
+
+    def test_old_staging_schema_fails_before_creating_a_run(self):
+        for error in (self.loader.UndefinedColumn, self.loader.UndefinedTable):
+            with self.subTest(error=error.__name__):
+                self.cursor.reset_mock()
+                self.cursor.execute.side_effect = error
+                with self.assertRaisesRegex(RuntimeError, "staging-schema-init"):
+                    self.loader.create_pipeline_run(run_id="manual_fixture")
+                self.cursor.execute.assert_called_once()
+        self.connection.commit.assert_not_called()
+
+    def test_copy_preserves_null_empty_and_escaped_source_text(self):
+        for value, expected in (
+            (None, r"\N"), ("", ""), (r"\N", r"\\N"), ("a\tb\nc\rd", r"a\tb\nc\rd"),
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(self.loader._copy_field(value), expected)
+
+    def test_snapshot_isolation_is_set_before_opening_the_transaction(self):
+        self.cursor.fetchone.return_value = None
+        source = MagicMock(autocommit=True)
+        source_cursor = source.cursor.return_value.__enter__.return_value
+        task = Mock()
+        task.xcom_pull.return_value = 42
+
+        def set_isolation(statement):
+            self.assertTrue(source.autocommit)
+            self.assertEqual(statement, "SET TRANSACTION ISOLATION LEVEL SNAPSHOT")
+
+        def load_table(*args, **kwargs):
+            self.assertIs(kwargs["source_connection"], source)
+            self.assertFalse(source.autocommit)
+
+        source_cursor.execute.side_effect = set_isolation
+        self.loader.pyodbc.connect = Mock(return_value=source)
+        with (
+            patch.dict("os.environ", {"SOURCE_DB_SNAPSHOT_ISOLATION": "SNAPSHOT"}),
+            patch.object(self.loader, "_sqlserver_connection_string", return_value="source"),
+            patch.object(self.loader, "load_source_table", side_effect=load_table) as load,
+        ):
+            self.loader.load_consistent_snapshot(ti=task)
+
+        self.loader.pyodbc.connect.assert_called_once_with("source", autocommit=True)
+        self.assertEqual(load.call_count, len(SOURCE_TABLES))
+        source.commit.assert_called_once()
 
     def test_success_returns_the_exact_run_id(self):
         self.assertEqual(self.finish(self.manifest), 42)

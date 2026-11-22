@@ -40,18 +40,13 @@ def generate_api_secret() -> str:
 SECRET_GENERATORS: dict[str, Callable[[], str]] = {
     # PostgreSQL
     "POSTGRES_ADMIN_PASSWORD": generate_password,
-    "STAGING_DB_PASSWORD": generate_password,
-    "AIRFLOW_DB_PASSWORD": generate_password,
 
     # ClickHouse
     "CLICKHOUSE_ADMIN_PASSWORD": generate_password,
-    "WAREHOUSE_DB_PASSWORD": generate_password,
-    "CDC_DB_PASSWORD": generate_password,
     "STUDENT_ID_HMAC_KEY": generate_api_secret,
 
     # Grafana
     "GRAFANA_ADMIN_PASSWORD": generate_password,
-    "GRAFANA_DB_PASSWORD": generate_password,
 
     # Airflow
     "AIRFLOW_ADMIN_PASSWORD": generate_password,
@@ -136,11 +131,6 @@ def update_environment_file() -> int:
 
         else:
             updated_lines.append(line)
-
-    # An existing installation can predate the dedicated CDC writer.
-    if "CDC_DB_PASSWORD" not in encountered_keys:
-        updated_lines.append(f"CDC_DB_PASSWORD={generate_password()}")
-        updated_keys.add("CDC_DB_PASSWORD")
 
     if updated_keys:
 

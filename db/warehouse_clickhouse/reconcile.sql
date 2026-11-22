@@ -1,3 +1,4 @@
+-- Compare shared business grains and return both publication boundaries.
 SELECT
     batch.source_run_id,
     batch.snapshot_started_at AS batch_snapshot_started_at,

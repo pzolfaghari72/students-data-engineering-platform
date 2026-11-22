@@ -12,14 +12,14 @@ datasources:
       port: $GRAFANA_DB_NATIVE_PORT
       protocol: native
       secure: false
-      username: $GRAFANA_DB_USER
+      username: $CLICKHOUSE_ADMIN_USER
       defaultDatabase: $WAREHOUSE_DB_NAME
       dialTimeout: "10"
       queryTimeout: 60
       maxOpenConns: "4"
       maxIdleConns: "2"
     secureJsonData:
-      password: $GRAFANA_DB_PASSWORD
+      password: $CLICKHOUSE_ADMIN_PASSWORD
 
   - name: Students CDC
     uid: students-cdc
@@ -32,11 +32,11 @@ datasources:
       port: $GRAFANA_DB_NATIVE_PORT
       protocol: native
       secure: false
-      username: $GRAFANA_DB_USER
+      username: $CLICKHOUSE_ADMIN_USER
       defaultDatabase: $CDC_DB_NAME
       dialTimeout: "10"
       queryTimeout: 60
       maxOpenConns: "4"
       maxIdleConns: "2"
     secureJsonData:
-      password: $GRAFANA_DB_PASSWORD
+      password: $CLICKHOUSE_ADMIN_PASSWORD

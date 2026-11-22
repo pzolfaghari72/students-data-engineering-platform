@@ -1,28 +1,31 @@
 # Grafana dashboards and observability
 
-Grafana issues the SQL configured for each panel against an identified datasource. The local image provides the ClickHouse plugin, and dashboard provisioning loads the repository definitions. The restricted dashboard reader receives published aggregates and status while raw CDC row images remain outside its grants. Preserve the provisioned UID and corresponding name when upgrading persisted Grafana state.
+Grafana provisions both dashboards from the repository. Sign in with the Grafana admin in `.env`. The local ClickHouse datasources use the ClickHouse admin. Persist the UIDs when updating an existing deployment. [Provisioned datasources](../../grafana/provisioning/datasources/clickhouse.yml)
 
-| Dashboard | Datasource | Scope |
-|---|---|---|
-| [Live Student Analytics — CDC](../../grafana/dashboards/live-students-cdc.json) | `students-cdc` | Current source totals and CDC progress. Its batch-publication panel uses `students-warehouse`. |
-| [Batch Snapshot — Student Enrollment, Capacity & Grades](../../grafana/dashboards/enrollment-performance.json) | `students-warehouse` | Latest published dimensional snapshot with term and department filters. |
+| Dashboard | Scope and datasource |
+|---|---|
+| [Batch Snapshot — Student Enrollment, Capacity & Grades](../../grafana/dashboards/enrollment-performance.json) | Latest published dimensional snapshot through `students-warehouse`, with term and department filters |
+| [Live Student Analytics — CDC](../../grafana/dashboards/live-students-cdc.json) | Current source totals, progress and processed source changes through `students-cdc`. Latest Batch publication uses `students-warehouse`. |
 
-## Interpret the business metrics
+## Business metrics
 
 | Metric | Meaning |
 |---|---|
-| Live students | Current nondeleted rows in source `Students`. Batch **Unique students** counts distinct pseudonymous student keys in the selected enrollment attempts. |
-| Offerings and offered seats | One row per offering, including offerings without enrollments. Offered seats sums offering capacity. |
-| Enrollments and capacity ratio | Enrollments count attempts. Batch enrollment/capacity divides attempts by offered seats in the selected scope. It can exceed 100%. |
-| Applications | Applicant/application records. Batch panels show overall totals, status and entry term. A department filter cannot be inferred from the application fact. |
-| Recorded grades and coverage | Attempts with a nonblank grade code. Batch coverage divides recorded grades by all attempts in scope. |
-| Credit-weighted grade points | Sum of grade points times credits divided by credits for eligible recorded grades with valid points and positive credits. Batch also groups grade metrics by term and department. |
+| Students | CDC counts current nondeleted source student rows. Batch **Unique students** counts distinct pseudonymous students in the selected enrollment attempts. |
+| Offerings and seats | One row per course offering. Seats sum capacity, including offerings without enrollments. |
+| Enrollments and capacity ratio | Enrollments count attempts. The ratio divides attempts by offered seats within the selected scope. |
+| Applications | Applicant/application records. Application panels use overall or entry-term scope because the fact has no department grain. |
+| Grade coverage and weighted grade points | Coverage divides attempts with a nonblank grade by all selected attempts. Weighted grade points use valid points and positive credits. |
 
-## Diagnose missing or stale results
+## CDC progress and events
 
-1. If a panel shows an error, check the provisioned datasource UID and health. Check the native ClickHouse endpoint, database name, expected views and restricted grants before interpreting the panel as empty.
-2. If queries succeed with no data, check for a batch publication and the active CDC generation. Initial replay can have sealed transport records before any generation becomes visible.
-3. If active CDC appears stale, read the last verified microbatch, sampled offsets behind and Connect task state together. A zero sampled lag refers to the last verified batch. A quiet source can leave the timestamp unchanged.
-4. Compare business counts using [reconciliation](../04-data-pipelines/reconciliation.md). Read each dashboard with its own metric grain, filters and publication boundary.
+- **CDC progress and freshness** shows the active generation, verified bootstrap, last batch seal and offsets behind at that seal. Use Connect status and Spark logs to check health between seals.
+- **Live CDC Events** and **CDC Events Over Time** count deduplicated inserts, updates and deletes in the selected range by first verified processing time. Snapshot reads and tombstones stay outside these counts. The rate is an average per selected minute.
+- **Latest CDC Changes** shows up to 25 recent changes in the active generation. It separates Debezium event time from the Spark batch seal and hides keys for people-related tables.
+- **CDC processing activity** reports the active generation's cumulative live event count, last processing time and latest event-to-seal delay when the underlying event timestamp is available and precedes the seal.
 
-[Provisioned datasources](../../grafana/provisioning/datasources/clickhouse.yml) · [Grafana provisioning](https://grafana.com/docs/grafana/latest/administration/provisioning/) · [Visual evidence](../assets/README.md)
+An empty CDC activity panel is expected during first bootstrap, and a time-filtered panel can be empty during source inactivity. If queries fail, check the datasource UID, database, ClickHouse credentials and view names. If data looks stale, compare the last verified batch with Connect status and worker logs. [Runbook](../07-operations/runbook.md#troubleshooting)
+
+## Batch reader grant repair
+
+A historical deployment used a restricted ClickHouse reader whose grant referred to `fact_enrollment`. The published view is `fact_course_enrollment`. The grant was repaired before the switch to the local ClickHouse admin. The preserved screenshot records the issue at the time. [Diagnostic capture](../assets/screenshots/grafana-batch-dashboard-diagnostics.png) · [Current Batch DDL](../../db/warehouse_clickhouse/warehouse_ddl.sql)

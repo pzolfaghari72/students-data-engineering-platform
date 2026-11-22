@@ -11,25 +11,23 @@ from dotenv import dotenv_values
 ROOT = Path(__file__).resolve().parents[1]
 CORE = """
 POSTGRES_HOST POSTGRES_CONTAINER_PORT POSTGRES_BOOTSTRAP_DB POSTGRES_ADMIN_USER
-POSTGRES_ADMIN_PASSWORD STAGING_DB_NAME STAGING_DB_USER STAGING_DB_PASSWORD
-AIRFLOW_DB_NAME AIRFLOW_DB_USER AIRFLOW_DB_PASSWORD CLICKHOUSE_HOST CLICKHOUSE_HTTP_PORT
+POSTGRES_ADMIN_PASSWORD STAGING_DB_NAME AIRFLOW_DB_NAME CLICKHOUSE_HOST CLICKHOUSE_HTTP_PORT
 CLICKHOUSE_NATIVE_PORT CLICKHOUSE_ADMIN_USER CLICKHOUSE_ADMIN_PASSWORD WAREHOUSE_DB_NAME
-WAREHOUSE_DB_USER WAREHOUSE_DB_PASSWORD GRAFANA_DB_USER GRAFANA_DB_PASSWORD
 GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD
 """.split()
 SOURCE = """
 SOURCE_DB_HOST SOURCE_DB_PORT SOURCE_DB_NAME SOURCE_DB_SCHEMA
 SOURCE_DB_ENCRYPT SOURCE_DB_TRUST_SERVER_CERTIFICATE
+SOURCE_DB_USER SOURCE_DB_PASSWORD
 """.split()
 BATCH = """
-SOURCE_DB_USER SOURCE_DB_PASSWORD SOURCE_DB_ODBC_DRIVER SOURCE_DB_CONNECTION_TIMEOUT
+SOURCE_DB_ODBC_DRIVER SOURCE_DB_CONNECTION_TIMEOUT
 SOURCE_DB_SNAPSHOT_ISOLATION STUDENT_ID_HMAC_KEY STAGING_JDBC_DRIVER WAREHOUSE_JDBC_DRIVER
 AIRFLOW__CORE__FERNET_KEY AIRFLOW_JWT_SECRET AIRFLOW__API__SECRET_KEY AIRFLOW_ADMIN_USER
 AIRFLOW_ADMIN_PASSWORD AIRFLOW_ADMIN_EMAIL AIRFLOW_API_SERVER_URL
 """.split()
 CDC_DEFAULTS = {
     "CDC_DB_NAME": "students_cdc",
-    "CDC_DB_USER": "students_cdc_writer",
     "CDC_CHECKPOINT_DIR": "/opt/spark/checkpoints/students-cdc-warehouse",
     "STREAMING_GENERATION_ID": "students-cdc-v1",
     "STREAMING_TRIGGER_INTERVAL": "5 seconds",
@@ -46,13 +44,10 @@ PLACEHOLDER = ("CHANGE_ME", "GENERATE_")
 
 def validate_environment(values, mode):
     checks = CORE.copy()
+    if mode in ("batch", "cdc", "all"):
+        checks += SOURCE
     if mode in ("batch", "all"):
-        checks += SOURCE + BATCH
-    if mode in ("cdc", "all"):
-        checks += SOURCE + ["CDC_DB_PASSWORD"]
-        for field in ("USER", "PASSWORD"):
-            override = f"SOURCE_CDC_{field}"
-            checks.append(override if values.get(override) else f"SOURCE_DB_{field}")
+        checks += BATCH
 
     errors = []
     for name in sorted(set(checks)):
@@ -106,13 +101,11 @@ def validate_environment(values, mode):
         if value is not None and (not value.isdecimal() or int(value) < 1):
             errors.append(f"{name} must be a positive integer.")
 
-    for group in (("WAREHOUSE_DB_NAME", "CDC_DB_NAME"),
-                  ("WAREHOUSE_DB_USER", "CDC_DB_USER", "GRAFANA_DB_USER")):
-        identifiers = [values.get(name, "") for name in group]
-        if len(set(identifiers)) != len(identifiers) or any(
-            not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) for name in identifiers
-        ):
-            errors.append(f"Use distinct ClickHouse identifiers for {', '.join(group)}.")
+    databases = [values.get(name, "") for name in ("WAREHOUSE_DB_NAME", "CDC_DB_NAME")]
+    if len(set(databases)) != len(databases) or any(
+        not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) for name in databases
+    ):
+        errors.append("Use distinct ClickHouse identifiers for WAREHOUSE_DB_NAME and CDC_DB_NAME.")
     return errors
 
 

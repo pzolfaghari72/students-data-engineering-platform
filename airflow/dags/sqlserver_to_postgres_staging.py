@@ -47,9 +47,10 @@ def sqlserver_to_postgres_staging():
     finish = PythonOperator(
         task_id="finish_pipeline_run",
         python_callable=finish_pipeline_run,
-        trigger_rule=TriggerRule.ALL_DONE,
+        trigger_rule=TriggerRule.ALL_DONE_MIN_ONE_SUCCESS,
     )
 
+    # A deterministic ID makes a repeated handoff safe for this staging run.
     publish = TriggerDagRunOperator(
         task_id="trigger_warehouse",
         trigger_dag_id="postgres_to_clickhouse_warehouse",
@@ -61,6 +62,8 @@ def sqlserver_to_postgres_staging():
     )
 
     start >> snapshot >> finish >> publish
+    # Finalize failed extraction only if the staging run was created.
+    start >> finish
 
 
 dag = sqlserver_to_postgres_staging()

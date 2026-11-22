@@ -178,6 +178,7 @@ def source_version_order(event: dict[str, Any]) -> str:
     serial = int(serial_no) if serial_no is not None else 0
     if serial < 0:
         raise ValueError("Debezium event_serial_no cannot be negative.")
+    # Prefer a live change to a snapshot read at the same commit LSN.
     return (
         f"{lsn_number(commit_lsn):025d}:"
         f"{0 if event['operation'] == 'r' else 1}:"

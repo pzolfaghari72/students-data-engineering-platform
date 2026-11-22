@@ -1,30 +1,31 @@
 # Local environment setup
 
-Use Linux, Docker with Compose v2 and Python 3.11 or 3.12. On Windows, use WSL2 and a Docker engine accessible from the distribution. Keep the checkout on the Linux filesystem for bind-mount and permissions behavior. The environment needs registry, Python package and Maven access for setup and first execution. A database administrator supplies the approved external SQL Server endpoint and reader.
+Use Docker with Compose v2, GNU Make, Python 3.11 or 3.12 with `venv`, and a reachable SQL Server. Allow access to image registries, package indexes and Maven for image builds and Spark dependencies. On WSL2, place the checkout on the Linux filesystem. The source endpoint must be reachable from Airflow and Connect inside Docker.
+
+## Prepare a fresh checkout
 
 ```bash
+python3 -m venv .venv
 make install
-make init
-# Update the SQL Server endpoint and approved reader in the private .env file.
-make compose-config
-make test
+test -f .env || cp .env.example .env
 ```
 
-[.env.example](../../.env.example) is the reference for variable names and defaults. `make install` prepares the host Python environment. `make init` creates missing local settings and generates secrets. Keep `.env` and interpolated Compose output private, and preserve credentials with their volumes. Changing `STUDENT_ID_HMAC_KEY` changes published identifiers.
+Update the source settings in the private `.env` before startup. `make up` calls initialization, which creates the local mount directories and fills supported `GENERATE_*` placeholders. `make init` runs that preparation independently. `make compose-config` checks interpolation without printing the resolved configuration.
 
-| Configuration | Key settings |
+| Settings | When to review them |
 |---|---|
-| Source | `SOURCE_DB_HOST`, `SOURCE_DB_PORT`, `SOURCE_DB_NAME`, `SOURCE_DB_SCHEMA` and approved reader. Use a trusted TLS certificate. |
-| CDC source identity | Set `SOURCE_CDC_USER` and `SOURCE_CDC_PASSWORD` together for a separate reader. Empty values fall back to the batch source credentials. |
-| Databases | `STAGING_DB_NAME`, `AIRFLOW_DB_NAME`, `WAREHOUSE_DB_NAME`, `CDC_DB_NAME`. Keep the ClickHouse databases and writer identities distinct. |
-| Batch | `BATCH_SNAPSHOT_SCHEDULE` is optional. `SPARK_BATCH_DRIVER_MEMORY` controls local driver sizing. |
-| CDC | Keep the connector name, topic prefix, generation, query name and checkpoint directory stable through a routine restart. Size retention and maximum offsets per trigger for the host. |
+| `SOURCE_DB_*` | Set host, port, database, schema, approved reader and TLS options. Both Airflow and Debezium use this reader. Keep certificate verification enabled for a trusted source. |
+| `POSTGRES_*`, `STAGING_DB_NAME`, `AIRFLOW_DB_NAME` | Local database endpoints and names. Airflow and staging use the PostgreSQL admin. |
+| `AIRFLOW_*`, `BATCH_SNAPSHOT_SCHEDULE` | Airflow UI login and internal execution API. Leave the schedule blank for manual full snapshots. |
+| `CLICKHOUSE_*`, `WAREHOUSE_DB_NAME`, `CDC_DB_NAME` | Local ClickHouse endpoints, admin and two distinct publication databases. Spark and the Grafana datasources use this admin. |
+| `KAFKA_*`, `CONNECT_*`, `DEBEZIUM_*` | Broker endpoints, topic and connector identities, snapshot mode and retention. Keep identities paired with the persisted Kafka and Connect state. |
+| `SPARK_*`, `STREAMING_*`, `CDC_CHECKPOINT_DIR` | Local execution and microbatch tuning. Keep the generation and checkpoint paired with the Kafka topics and ClickHouse ledger. |
+| `GRAFANA_*`, `STUDENT_ID_HMAC_KEY` | Grafana UI login and stable pseudonymous Batch identifiers. Preserve the HMAC key and Airflow keys with their data. |
 
-Run the mode-specific validators before startup.
+The template groups every setting by service and provides local defaults. Keep the real `.env` and resolved Compose output private. [Environment template](../../.env.example)
 
-```bash
-.venv/bin/python scripts/validate_environment.py --mode batch
-.venv/bin/python scripts/validate_environment.py --mode cdc
-```
+## Source readiness
 
-See the [source readiness guide](../05-data-platform/source-and-staging.md) and [operational runbook](../07-operations/runbook.md). If connectivity fails, test it from the Airflow or Connect service network. Browser access to Airflow confirms only the host-to-UI route.
+Ask the source owner to verify the expected tables and reader access. Batch requires SQL Server snapshot isolation. CDC also requires the 15 capture instances, working Agent capture and cleanup jobs, and sufficient retention. The source readiness script reads configuration and permissions. Source enablement is a separate DBA operation. [Source prerequisites](../05-data-platform/source-and-staging.md#cdc-capture-prerequisites)
+
+Follow the README to start the services and trigger the first Batch snapshot. The runbook covers partial startup, retries and restarts. [Quick start](../../README.md#quick-start) · [Runbook](../07-operations/runbook.md)

@@ -22,4 +22,4 @@ Use the Make targets to start the appropriate services and wait for initializati
 | Spark | Checkpoint volume with query and progress state |
 | Grafana | Local application state. Dashboard definitions and datasources come from provisioning. |
 
-Run full bootstrap, warehouse backfills and builds separately on a small host. Watch memory, disk and health through `docker stats` and service logs. ClickHouse limits CDC writer and Grafana query threads and can spill aggregations. For startup ordering, backup and checkpoint ownership, see the [runbook](../07-operations/runbook.md).
+Run full bootstrap, warehouse backfills and builds separately on a small host. Watch memory, disk and health through `docker stats` and service logs. ClickHouse's local profile limits query threads and can spill aggregations. For startup ordering, backup and checkpoint ownership, see the [runbook](../07-operations/runbook.md).

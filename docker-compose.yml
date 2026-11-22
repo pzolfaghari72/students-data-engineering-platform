@@ -33,7 +33,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__API__SECRET_KEY: ${AIRFLOW__API__SECRET_KEY:-}
 
     # Airflow metadata database connection.
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:?Set AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD:?Set AIRFLOW_DB_PASSWORD (URL-encode special characters)}@${POSTGRES_HOST:?Set POSTGRES_HOST}:${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}/${AIRFLOW_DB_NAME:?Set AIRFLOW_DB_NAME}
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_ADMIN_USER:?Set POSTGRES_ADMIN_USER}:${POSTGRES_ADMIN_PASSWORD:?Set POSTGRES_ADMIN_PASSWORD (URL-encode special characters)}@${POSTGRES_HOST:?Set POSTGRES_HOST}:${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}/${AIRFLOW_DB_NAME:?Set AIRFLOW_DB_NAME}
 
     # Initial Airflow administrator credentials.
     AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER:-}
@@ -57,15 +57,15 @@ x-airflow-common: &airflow-common
     STAGING_DB_HOST: ${POSTGRES_HOST:?Set POSTGRES_HOST}
     STAGING_DB_PORT: ${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}
     STAGING_DB_NAME: ${STAGING_DB_NAME:?Set STAGING_DB_NAME}
-    STAGING_DB_USER: ${STAGING_DB_USER:?Set STAGING_DB_USER}
-    STAGING_DB_PASSWORD: ${STAGING_DB_PASSWORD:?Set STAGING_DB_PASSWORD}
+    STAGING_DB_USER: ${POSTGRES_ADMIN_USER:?Set POSTGRES_ADMIN_USER}
+    STAGING_DB_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?Set POSTGRES_ADMIN_PASSWORD}
 
     # JDBC settings for the Spark warehouse task executed by LocalExecutor.
     STAGING_JDBC_URL: jdbc:postgresql://${POSTGRES_HOST:?Set POSTGRES_HOST}:${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}/${STAGING_DB_NAME:?Set STAGING_DB_NAME}
     STAGING_JDBC_DRIVER: ${STAGING_JDBC_DRIVER:-}
     WAREHOUSE_JDBC_URL: jdbc:clickhouse:http://${CLICKHOUSE_HOST:?Set CLICKHOUSE_HOST}:${CLICKHOUSE_HTTP_PORT:?Set CLICKHOUSE_HTTP_PORT}/${WAREHOUSE_DB_NAME:?Set WAREHOUSE_DB_NAME}
-    WAREHOUSE_DB_USER: ${WAREHOUSE_DB_USER:?Set WAREHOUSE_DB_USER}
-    WAREHOUSE_DB_PASSWORD: ${WAREHOUSE_DB_PASSWORD:?Set WAREHOUSE_DB_PASSWORD}
+    WAREHOUSE_DB_USER: ${CLICKHOUSE_ADMIN_USER:?Set CLICKHOUSE_ADMIN_USER}
+    WAREHOUSE_DB_PASSWORD: ${CLICKHOUSE_ADMIN_PASSWORD:?Set CLICKHOUSE_ADMIN_PASSWORD}
     WAREHOUSE_JDBC_DRIVER: ${WAREHOUSE_JDBC_DRIVER:-}
     WAREHOUSE_HOST: ${CLICKHOUSE_HOST:?Set CLICKHOUSE_HOST}
     WAREHOUSE_HTTP_PORT: ${CLICKHOUSE_HTTP_PORT:?Set CLICKHOUSE_HTTP_PORT}
@@ -125,7 +125,7 @@ services:
     networks: [platform]
 
 
-  # Initialize application databases and dedicated database users.
+  # Initialize the application databases using the PostgreSQL admin.
   postgres-init:
     image: postgres:16-alpine
     restart: "no"
@@ -142,11 +142,7 @@ services:
       POSTGRES_ADMIN_USER: ${POSTGRES_ADMIN_USER:?Set POSTGRES_ADMIN_USER}
       POSTGRES_BOOTSTRAP_DB: ${POSTGRES_BOOTSTRAP_DB:?Set POSTGRES_BOOTSTRAP_DB}
       STAGING_DB_NAME: ${STAGING_DB_NAME:?Set STAGING_DB_NAME}
-      STAGING_DB_USER: ${STAGING_DB_USER:?Set STAGING_DB_USER}
-      STAGING_DB_PASSWORD: ${STAGING_DB_PASSWORD:?Set STAGING_DB_PASSWORD}
       AIRFLOW_DB_NAME: ${AIRFLOW_DB_NAME:?Set AIRFLOW_DB_NAME}
-      AIRFLOW_DB_USER: ${AIRFLOW_DB_USER:?Set AIRFLOW_DB_USER}
-      AIRFLOW_DB_PASSWORD: ${AIRFLOW_DB_PASSWORD:?Set AIRFLOW_DB_PASSWORD}
 
     # Execute the initialization script using the shell.
     entrypoint: [/bin/sh, -ec]
@@ -154,36 +150,18 @@ services:
       - |
         # Connect to the PostgreSQL bootstrap database.
         psql -v ON_ERROR_STOP=1 -h "$$POSTGRES_HOST" -p "$$POSTGRES_CONTAINER_PORT" -U "$$POSTGRES_ADMIN_USER" -d "$$POSTGRES_BOOTSTRAP_DB" \
-          -v staging_user="$$STAGING_DB_USER" -v staging_password="$$STAGING_DB_PASSWORD" -v staging_db="$$STAGING_DB_NAME" \
-          -v airflow_user="$$AIRFLOW_DB_USER" -v airflow_password="$$AIRFLOW_DB_PASSWORD" -v airflow_db="$$AIRFLOW_DB_NAME" <<'SQL'
-
-        -- Create or update the dedicated staging database role.
-        SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'staging_user', :'staging_password')
-        WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'staging_user') \gexec
-        SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', :'staging_user', :'staging_password') \gexec
-
-        -- Create the staging database and assign ownership.
-        SELECT format('CREATE DATABASE %I OWNER %I', :'staging_db', :'staging_user')
+          -v staging_db="$$STAGING_DB_NAME" -v airflow_db="$$AIRFLOW_DB_NAME" <<'SQL'
+        SELECT format('CREATE DATABASE %I', :'staging_db')
         WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'staging_db') \gexec
-        SELECT format('ALTER DATABASE %I OWNER TO %I', :'staging_db', :'staging_user') \gexec
-
-        -- Create or update the dedicated Airflow database role.
-        SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'airflow_user', :'airflow_password')
-        WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'airflow_user') \gexec
-        SELECT format('ALTER ROLE %I LOGIN PASSWORD %L', :'airflow_user', :'airflow_password') \gexec
-
-        -- Create the Airflow metadata database and assign ownership.
-        SELECT format('CREATE DATABASE %I OWNER %I', :'airflow_db', :'airflow_user')
+        SELECT format('CREATE DATABASE %I', :'airflow_db')
         WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'airflow_db') \gexec
-        SELECT format('ALTER DATABASE %I OWNER TO %I', :'airflow_db', :'airflow_user') \gexec
-
         SQL
 
     networks: [platform]
 
 
 
-  # Create staging schemas after the database and role are ready.
+  # Apply staging DDL after the database is ready, including on an existing volume.
   staging-schema-init:
     image: postgres:16-alpine
     restart: "no"
@@ -192,11 +170,11 @@ services:
         condition: service_completed_successfully
 
     environment:
-      PGPASSWORD: ${STAGING_DB_PASSWORD:?Set STAGING_DB_PASSWORD}
+      PGPASSWORD: ${POSTGRES_ADMIN_PASSWORD:?Set POSTGRES_ADMIN_PASSWORD}
       STAGING_DB_HOST: ${POSTGRES_HOST:?Set POSTGRES_HOST}
       STAGING_DB_PORT: ${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}
       STAGING_DB_NAME: ${STAGING_DB_NAME:?Set STAGING_DB_NAME}
-      STAGING_DB_USER: ${STAGING_DB_USER:?Set STAGING_DB_USER}
+      STAGING_DB_USER: ${POSTGRES_ADMIN_USER:?Set POSTGRES_ADMIN_USER}
 
     volumes:
       - ./db/staging_postgres/staging_ddl:/staging_ddl:ro
@@ -225,13 +203,7 @@ services:
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
       WAREHOUSE_DB_NAME: ${WAREHOUSE_DB_NAME:?Set WAREHOUSE_DB_NAME}
       CDC_DB_NAME: ${CDC_DB_NAME:-students_cdc}
-      CDC_DB_USER: ${CDC_DB_USER:-students_cdc_writer}
-      CDC_DB_PASSWORD: ${CDC_DB_PASSWORD:-}
       CLICKHOUSE_DASHBOARD_GROUP_BY_BYTES: ${CLICKHOUSE_DASHBOARD_GROUP_BY_BYTES:-134217728}
-      WAREHOUSE_DB_USER: ${WAREHOUSE_DB_USER:?Set WAREHOUSE_DB_USER}
-      WAREHOUSE_DB_PASSWORD: ${WAREHOUSE_DB_PASSWORD:?Set WAREHOUSE_DB_PASSWORD}
-      GRAFANA_DB_USER: ${GRAFANA_DB_USER:?Set GRAFANA_DB_USER}
-      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:?Set GRAFANA_DB_PASSWORD}
       CLICKHOUSE_HTTP_PORT: ${CLICKHOUSE_HTTP_PORT:?Set CLICKHOUSE_HTTP_PORT}
       CLICKHOUSE_NATIVE_PORT: ${CLICKHOUSE_NATIVE_PORT:?Set CLICKHOUSE_NATIVE_PORT}
       TZ: ${TIMEZONE:-UTC}
@@ -245,6 +217,7 @@ services:
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       - ./clickhouse/config:/etc/clickhouse-server/config.d:ro
+      - ./clickhouse/profiles.xml:/etc/clickhouse-server/users.d/platform-profiles.xml:ro
 
     # Verify that ClickHouse can execute queries.
     healthcheck:
@@ -257,8 +230,7 @@ services:
     networks: [platform]
 
 
-  # Apply warehouse DDL and users on both new and existing ClickHouse volumes.
-  # Reuses the project's existing setup script; it must support repeated runs.
+  # Apply the warehouse DDL using the admin initialized by the server image.
   clickhouse-init:
     image: clickhouse/clickhouse-server:24.8
     restart: "no"
@@ -266,18 +238,16 @@ services:
       clickhouse:
         condition: service_healthy
     environment: *clickhouse-env
-    # Share only networking so the existing localhost-based setup script works.
-    # This client container does not mount ClickHouse's database volume.
+    # Share networking for the localhost-based initializer.
     network_mode: "service:clickhouse"
     volumes:
-      - ./scripts/create_clickhouse_users.sh:/opt/clickhouse-setup/create_clickhouse_users.sh:ro
+      - ./scripts/initialize_clickhouse.sh:/opt/clickhouse-setup/initialize_clickhouse.sh:ro
       - ./db/warehouse_clickhouse:/warehouse_ddl:ro
     entrypoint: ["/bin/bash", "-euc"]
     command:
       - |
-        test -f /opt/clickhouse-setup/create_clickhouse_users.sh
-        bash -e /opt/clickhouse-setup/create_clickhouse_users.sh
-        printf 'ClickHouse schemas and role grants initialized.\n'
+        bash -e /opt/clickhouse-setup/initialize_clickhouse.sh
+        printf 'ClickHouse schemas initialized.\n'
 
   kafka:
     profiles: ["cdc"]
@@ -373,7 +343,7 @@ services:
       GROUP_ID: ${CONNECT_GROUP_ID:-1}
       CONNECT_CONFIG_PROVIDERS: env
       CONNECT_CONFIG_PROVIDERS_ENV_CLASS: org.apache.kafka.common.config.provider.EnvVarConfigProvider
-      CDC_SOURCE_PASSWORD: ${SOURCE_CDC_PASSWORD:-${SOURCE_DB_PASSWORD}}
+      CDC_SOURCE_PASSWORD: ${SOURCE_DB_PASSWORD:-}
 
       # Kafka topics used to store connector configurations, offsets, and status.
       CONFIG_STORAGE_TOPIC: ${CONNECT_CONFIG_STORAGE_TOPIC:-connect_configs}
@@ -396,7 +366,7 @@ services:
     ports:
       - "127.0.0.1:${CONNECT_HOST_PORT:-18083}:${CONNECT_INTERNAL_PORT:-8083}"
 
-    # Worker REST readiness; connector tasks and snapshot readiness are separate.
+    # REST readiness lets registration verify the connector task separately.
     # curl is supplied by the Debezium base image; retain it in the custom image.
     healthcheck:
       test:
@@ -430,7 +400,7 @@ services:
       SOURCE_DB_HOST: ${SOURCE_DB_HOST:-}
       SOURCE_DB_PORT: ${SOURCE_DB_PORT:-}
       SOURCE_DB_NAME: ${SOURCE_DB_NAME:-}
-      SOURCE_DB_USER: ${SOURCE_CDC_USER:-${SOURCE_DB_USER}}
+      SOURCE_DB_USER: ${SOURCE_DB_USER:-}
       SOURCE_DB_SCHEMA: ${SOURCE_DB_SCHEMA:-}
       SOURCE_DB_ENCRYPT: ${SOURCE_DB_ENCRYPT:-}
       SOURCE_DB_TRUST_SERVER_CERTIFICATE: ${SOURCE_DB_TRUST_SERVER_CERTIFICATE:-}
@@ -481,8 +451,8 @@ services:
       WAREHOUSE_HOST: ${CLICKHOUSE_HOST:?Set CLICKHOUSE_HOST}
       WAREHOUSE_HTTP_PORT: ${CLICKHOUSE_HTTP_PORT:?Set CLICKHOUSE_HTTP_PORT}
       CDC_DB_NAME: ${CDC_DB_NAME:-students_cdc}
-      CDC_DB_USER: ${CDC_DB_USER:-students_cdc_writer}
-      CDC_DB_PASSWORD: ${CDC_DB_PASSWORD:-}
+      CDC_DB_USER: ${CLICKHOUSE_ADMIN_USER:?Set CLICKHOUSE_ADMIN_USER}
+      CDC_DB_PASSWORD: ${CLICKHOUSE_ADMIN_PASSWORD:?Set CLICKHOUSE_ADMIN_PASSWORD}
       TZ: ${TIMEZONE:-UTC}
     volumes:
       - ./spark:/opt/spark-apps:ro
@@ -602,8 +572,8 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_PATHS_PLUGINS: /usr/share/grafana/plugins
-      GRAFANA_DB_USER: ${GRAFANA_DB_USER:?Set GRAFANA_DB_USER in .env}
-      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:?Set GRAFANA_DB_PASSWORD in .env}
+      CLICKHOUSE_ADMIN_USER: ${CLICKHOUSE_ADMIN_USER:?Set CLICKHOUSE_ADMIN_USER}
+      CLICKHOUSE_ADMIN_PASSWORD: ${CLICKHOUSE_ADMIN_PASSWORD:?Set CLICKHOUSE_ADMIN_PASSWORD}
       GRAFANA_DB_HOST: ${CLICKHOUSE_HOST:?Set CLICKHOUSE_HOST}
       GRAFANA_DB_NATIVE_PORT: ${CLICKHOUSE_NATIVE_PORT:?Set CLICKHOUSE_NATIVE_PORT}
       CDC_DB_NAME: ${CDC_DB_NAME:-students_cdc}

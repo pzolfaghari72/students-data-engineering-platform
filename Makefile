@@ -19,7 +19,9 @@ install:
 compose-config:
 	docker compose --profile cdc --profile streaming config --quiet
 
-up: up-pipeline
+# Start Airflow first. Prepare Kafka topics before registering the connector.
+up: up-batch
+	$(MAKE) streaming-up
 
 up-core: init
 	docker compose up -d staging-schema-init clickhouse-init
@@ -51,7 +53,7 @@ warehouse-load:
 	docker compose exec -T airflow-scheduler airflow dags trigger postgres_to_clickhouse_warehouse --conf "{\"source_run_id\": \"$$RUN_ID\"}"
 
 reconcile:
-	docker compose exec -T clickhouse sh -ec 'clickhouse-client --port "$$CLICKHOUSE_NATIVE_PORT" --user "$$GRAFANA_DB_USER" --password "$$GRAFANA_DB_PASSWORD" --database "$$WAREHOUSE_DB_NAME" --param_cdc_db="$$CDC_DB_NAME"' < db/warehouse_clickhouse/reconcile.sql
+	docker compose exec -T clickhouse sh -ec 'clickhouse-client --port "$$CLICKHOUSE_NATIVE_PORT" --user "$$CLICKHOUSE_ADMIN_USER" --password "$$CLICKHOUSE_ADMIN_PASSWORD" --database "$$WAREHOUSE_DB_NAME" --param_cdc_db="$${CDC_DB_NAME:-students_cdc}"' < db/warehouse_clickhouse/reconcile.sql
 
 status:
 	docker compose --profile cdc --profile streaming ps

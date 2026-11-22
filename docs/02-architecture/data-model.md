@@ -12,7 +12,7 @@ The assessed source includes composite course identity `(DepartmentCode, CourseN
 
 ```mermaid
 erDiagram
-    PIPELINE_RUNS |o--o{ EXTRACTION_BATCHES : tracks
+    PIPELINE_RUNS ||--o{ EXTRACTION_BATCHES : tracks
     EXTRACTION_BATCHES |o--o{ TABLE_LOAD_STATUS : last_batch
     EXTRACTION_BATCHES ||--o{ RAW_COURSES : scopes
     PIPELINE_RUNS {
@@ -72,12 +72,12 @@ flowchart TD
     E --> R["cdc_committed_records"]
     B --> R
     R --> S["cdc_serving_records"]
-    G --> S
-    P --> S
+    P --> A["cdc_active_generation"]
+    A --> S
     S --> L["cdc_logical_events"]
     S --> C["cdc_current_state"]
     S --> K["cdc_business_kpis"]
-    P --> K
+    A --> K
     B --> H["cdc_pipeline_health"]
     G --> H
     P --> H

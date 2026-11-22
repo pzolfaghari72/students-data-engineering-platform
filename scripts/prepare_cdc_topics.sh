@@ -8,6 +8,7 @@ broker="localhost:${KAFKA_INTERNAL_PORT:?}"
 [[ $# -eq 15 ]] || { printf 'Expected the 15 source table names.\n' >&2; exit 1; }
 topics=(/opt/kafka/bin/kafka-topics.sh --bootstrap-server "$broker")
 configs=(/opt/kafka/bin/kafka-configs.sh --bootstrap-server "$broker")
+# Delete-only retention preserves intermediate changes for contiguous replay.
 for table in "$@"; do
     topic="$DEBEZIUM_TOPIC_PREFIX.$SOURCE_DB_NAME.$SOURCE_DB_SCHEMA.$table"
     "${topics[@]}" --create --if-not-exists --topic "$topic" --replication-factor 1 \
@@ -27,6 +28,7 @@ for table in "$@"; do
     done
 done
 
+# Debezium needs the complete ordered schema history to resume decoding.
 history=$DEBEZIUM_SCHEMA_HISTORY_TOPIC
 "${topics[@]}" --create --if-not-exists --topic "$history" --replication-factor 1 --partitions 1 \
     --config cleanup.policy=delete --config retention.ms=-1 --config retention.bytes=-1

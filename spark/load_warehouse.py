@@ -132,6 +132,7 @@ def _snapshot_batches(spark: SparkSession, run_id: int) -> tuple[Any, dict[str, 
     if selected_run is None:
         raise RuntimeError(f"Staging run {run_id} is not a successful full snapshot.")
 
+    # Pin reads to the finalized manifest even if staging has a newer snapshot.
     batches = _read_staging_query(
         spark,
         f"""
@@ -182,6 +183,7 @@ def _read_raw_table(
     if partition_column is None:
         return reader.load()
 
+    # Calculate JDBC split bounds from the same table batch as the read.
     bounds = _read_staging_query(
         spark,
         f"""
@@ -725,6 +727,7 @@ def run(spark: SparkSession, client: Any, source_run_id: int) -> None:
                 *[expected[table][0] for table in FACT_TABLES],
             )
         ]
+        # Publish only after every candidate table passes ClickHouse read-back.
         client.insert("warehouse_model_loads", load_values, column_names=load_columns)
     finally:
         for frame in frames.values():

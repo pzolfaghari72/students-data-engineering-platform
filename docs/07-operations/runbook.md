@@ -1,57 +1,97 @@
 # Operational runbook
 
-## Start and operate the stack
+## Startup, restart and shutdown
 
-Run `make install` once, then `make init`. Keep `.env` private. The template documents host bindings, internal endpoints, roles and application settings. Normal local host mappings bind to loopback. Supply SQL Server endpoint and credentials in `.env`. Keep source TLS verification enabled with a valid certificate, except for a separately controlled local fixture. Set the connector-specific reader variables if the approved CDC login differs from the batch login.
+Complete the source-owner checks and private configuration before first startup. `make up` initializes databases and Airflow, starts Kafka and Connect, verifies topics and registration, then starts Spark streaming and Grafana. A fresh connector can begin its initial SQL Server snapshot during startup. The first Batch extract is an explicit Airflow action. [Quick start](../../README.md#first-run) · [Local setup](../03-infrastructure/setup.md)
 
 | Command | Effect |
 |---|---|
-| `make up-core` | Start database services and initialize schemas and grants |
-| `make up-batch` | Start databases and Airflow |
-| `make up` | Start batch and Grafana |
-| `make dashboards-up` | Start ClickHouse and Grafana |
-| `make cdc-up` | Start the broker and Connect, verify topic policies, and register or check the connector |
-| `make streaming-up` | Complete CDC startup and start Spark plus Grafana |
-| `make status` | Show state for all profiles |
-| `make logs` | Tail service logs |
-| `make down` | Stop all platform containers while retaining named volumes |
+| `make status` | Service state, including the CDC and streaming profiles |
+| `make logs` | Tails logs across the profiles. Use `docker compose logs <service>` to focus on a service. |
+| `make up-core` | PostgreSQL and ClickHouse with schema initialization |
+| `make up-batch` | Database and Airflow services for Batch |
+| `make up-pipeline` | Batch services and Grafana |
+| `make cdc-up` | Kafka and Connect, topic checks and connector registration or verification |
+| `make streaming-up` | CDC services, Spark streaming and Grafana |
+| `make dashboards-up` | ClickHouse and Grafana |
+| `make down` | Stops and removes project containers while preserving named volumes |
 
-### Batch
+Use `make up` again for a routine restart. Preserve the connector name, Kafka topics, generation ID, checkpoint and databases. With a blank Batch schedule, deploys and restarts leave the choice to start a new extraction with the operator.
 
-Unpause `sqlserver_to_postgres_staging` and `postgres_to_clickhouse_warehouse` in Airflow. Trigger the snapshot DAG for a full extract. Track the staging run ID through the warehouse DAG and `batch_publication_status`. The extract DAG finishing means it staged the snapshot and requested processing. Use the warehouse DAG and publication view to confirm it is available to Grafana.
+## Run or retry Batch
 
-An extraction failure requires a new snapshot DAG run. A warehouse failure can be retried against the same validated staging run with `make warehouse-load RUN_ID=123`. An interrupted warehouse attempt can leave unreferenced rows in ClickHouse. Keep recent publications and any staging data needed for recovery. Before pruning, account for active attempts, the current and previous publications, and required rollback evidence.
+Unpause both Batch DAGs and trigger `sqlserver_to_postgres_staging`. Track the validated staging run ID through `postgres_to_clickhouse_warehouse` and `batch_publication_status`. Staging success means the extract finished and the handoff was requested. The final warehouse marker makes the snapshot available to Grafana.
 
-Set `BATCH_SNAPSHOT_SCHEDULE` only when there is a reason to collect recurring full snapshots. The warehouse DAG is always event-triggered or manually started with an explicit run ID.
+A failed extraction requires a fresh staging run. A failed warehouse load can retry the same successful staging input with `make warehouse-load RUN_ID=123`, using its actual ID. During upgrades, apply the existing staging initializer if the DAG reports outdated metadata. Keep the raw batches needed by current and recent publications. [Batch failure handling](../04-data-pipelines/batch.md#operation-and-failure-handling)
 
-### CDC readiness
+## Monitor and recover CDC
 
-Have the SQL Server DBA verify snapshot isolation, the capture-job and cleanup-job status, retention, reader permissions and the expected 15 table mappings. Run the [read-only readiness script](../../db/source_assessment/sqlserver_cdc_prerequisites.sql) in the configured database with `sqlcmd -b -d <database> -v SourceSchema=<schema> ConnectorLogin=<login> -i <script>`. The [enablement script](../../db/staging_postgres/enable_source_cdc.sql) accepts `SourceDatabase` and `SourceSchema` and is for the authorized DBA on a designated source. The runtime accounts only need the approved read and metadata privileges.
+The DBA verifies capture and cleanup jobs, retention and permissions. The read-only readiness SQL takes the source schema and connector login as parameters. Run it in the source database with `sqlcmd -b -d <database> -v SourceSchema=<schema> ConnectorLogin=<login> -i <script>`. Run any source enablement only with the source owner's authorization. [Readiness SQL](../../db/source_assessment/sqlserver_cdc_prerequisites.sql) · [Source requirements](../05-data-platform/source-and-staging.md#cdc-capture-prerequisites)
 
-Run `make streaming-up` after readiness. The data topics use the configured partition count and delete-only retention. Increase retention before a planned outage or a replay that could exceed it. Treat Connect storage and schema-history topics as durable operational state. The worker uses the environment config provider for newly registered connector credentials. Existing connector settings are preserved. Migrate a previously stored password in a reviewed maintenance window.
+Spark can stay in `BOOTSTRAPPING` after the Connect task reports `RUNNING`. Check verified offsets and the ClickHouse publication. Spark can retry an uncommitted callback and revalidate an existing seal. Schedule resource-heavy Batch and replay work separately if the host is constrained.
 
-### CDC monitoring and recovery
+- **Retention or lineage mismatch.** Compare the Kafka beginning and end offsets, saved checkpoint identity and ClickHouse commit ledger. Restore compatible state or plan a new isolated connector, topic namespace, checkpoint and baseline with the source owner.
+- **Schema evolution.** Validate changes to source keys, operation envelopes and KPI fields. Coordinate capture-instance transitions with the DBA and preserve Debezium schema history.
+- **Upgrade from the retired PostgreSQL CDC path.** Record the previous connector, topic IDs, offsets and generation health. Stop the old writer in an approved maintenance window. Reuse retained Kafka offsets only if they cover the full baseline and use a separate checkpoint for the new CDC database. Keep rollback state until the new generation has passed reconciliation.
 
-Use **Live Student Analytics — CDC** for generation state, verified bootstrap progress, and sampled lag. The Connect REST status and Spark logs distinguish an idle source from a stopped query. Lag and live processing delay are sampled at successful microbatches. A bootstrap can finish after the broker already has some live records. A generation stays hidden until ClickHouse has verified the complete saved cut.
-
-On a small host, avoid running full bootstrap, batch backfills and load tests concurrently. The dashboard reader and CDC writer limit query threads and can spill large aggregations to disk at the threshold configured by `CLICKHOUSE_DASHBOARD_GROUP_BY_BYTES`.
-
-- **Ordinary restart.** Restart the same Spark service with the same generation name, topic IDs, checkpoint directory and ClickHouse database. Spark can retry an uncommitted callback automatically. An existing sealed batch is verified on replay. Avoid resetting a checkpoint to clear a routine error.
-- **Retention or restore mismatch.** Compare Kafka beginning and end offsets, Spark checkpoint identity, and the ClickHouse commit ledger. Restore compatible state if available. Otherwise use a new connector/topic/checkpoint lineage and take a fresh baseline. Keep the last good published generation until the replacement passes reconciliation.
-- **Schema evolution.** A compatible payload field addition remains in the raw envelope. Validate changes to the source key, event structure or KPI fields before rollout. Coordinate unsupported changes with the DBA using SQL Server’s capture-instance transition and preserve schema history.
-- **Upgrade from the PostgreSQL-backed stream.** Capture the previous connector, source topic IDs and offsets, and the old generation’s health. Stop the old Spark writer in the maintenance window before applying the narrowed legacy warehouse grants. Replay verified Kafka offsets into the dedicated CDC database using a new checkpoint path. If the full baseline is unavailable, create a new connector name, topic prefix and schema-history topic with an approved initial snapshot. Promote Grafana with the new stack after the generation is verified. Keep the legacy checkpoint, PostgreSQL CDC objects, old ClickHouse events and Kafka lineage until dependency and rollback checks permit removal.
-
-On upgraded installations, check that the Spark user can write to the root of the existing checkpoint volume. If an older volume is root-owned, correct only the mount directory while the worker is stopped.
+An upgraded Spark volume can retain ownership from an older image. If the checkpoint root is root-owned, correct the mount directory during maintenance with the worker stopped. [CDC replay contract](../04-data-pipelines/cdc.md#verified-writes-deduplication-and-replay)
 
 ```bash
 docker compose --profile cdc --profile streaming run -T --rm --no-deps \
   --user root --entrypoint chown spark-cdc-stream spark:spark /opt/spark/checkpoints
 ```
 
-## Reconciliation and local persistence
+## Troubleshooting
 
-`make reconcile` compares current application, offering and enrollment counts from the two data products and prints the reference IDs, timestamps and observed lag. Query it while the source is quiescent or interpret changes after the batch snapshot before calling a difference a defect.
+| Symptom | First check |
+|---|---|
+| Source login or TLS failure | Verify the endpoint, approved reader and certificate trust from the affected container. |
+| Batch finishes staging with no dashboard update | Check the triggered warehouse task and selected publication ID. |
+| CDC totals are empty | Check whether a generation is active, then inspect bootstrap progress and the Connect task. |
+| CDC metrics appear stale | Compare the latest Spark seal, sampled Kafka offsets, Connect status and source activity. |
+| Grafana query error | Check the provisioned datasource UID and its ClickHouse database and access. |
+| `make reconcile` returns no rows | Check that both products have published. |
 
-Named volumes preserve data across restarts on one host. For an upgrade or host-loss rehearsal, back up PostgreSQL and ClickHouse and preserve Kafka’s data and the compatible Spark checkpoint together. Verify restores in an isolated environment. Reserve volume removal and Kafka topic deletion for confirmed disposable resources.
+### Read-only diagnostics
 
-See [environment setup](../03-infrastructure/setup.md), [service state and ports](../03-infrastructure/services.md), [batch failure handling](../04-data-pipelines/batch.md#operation-and-failure-handling), [CDC replay](../04-data-pipelines/cdc.md#verified-writes-deduplication-and-replay), and the [validation record](../06-observability-and-quality/testing-and-validation.md).
+Run the first query in PostgreSQL staging and replace `123` with the selected staging run ID.
+
+```sql
+SELECT source_table, status, source_rows_expected, extracted_rows, inserted_rows
+FROM metadata.extraction_batches
+WHERE run_id = 123
+ORDER BY source_table;
+```
+
+Run the publication query in the ClickHouse Batch database and the progress query in the CDC database.
+
+```sql
+SELECT source_run_id, snapshot_started_at, completed_at,
+       fact_application_rows, fact_course_offering_rows, fact_enrollment_rows
+FROM batch_publication_status;
+
+SELECT generation_id, active_generation, status, verified_bootstrap_records,
+       bootstrap_records, last_verified_at, offsets_behind_at_last_batch
+FROM cdc_pipeline_health;
+```
+
+For a specific authorized source check, query the needed field from `cdc_current_state`. Substitute the approved key and column.
+
+```sql
+SELECT source_timestamp, JSONExtractRaw(row_image, 'StudentStatus') AS current_value
+FROM cdc_current_state
+WHERE source_table = 'Students' AND JSONExtractUInt(source_key, 'StudentId') = 12345;
+```
+
+Use `make reconcile` at a quiescent source boundary when possible. Record both publications and interpret the differences with source changes in mind. [Reconciliation guide](../04-data-pipelines/reconciliation.md)
+
+## Backup and restore
+
+Named volumes preserve data on one host. Record the selected Batch run, active CDC generation and latest verified offsets before maintenance. Preserve the corresponding private configuration and test restores in an isolated environment.
+
+| State | Restore check |
+|---|---|
+| PostgreSQL staging and Airflow metadata | The selected run, raw batches and Airflow task history still resolve. |
+| ClickHouse Batch | The publication selects the expected snapshot and counts. |
+| Kafka and Connect, Spark checkpoint and ClickHouse CDC | Topic identities, retained offset ranges, Spark query ID and verified sink coverage agree. Restore these together. |
+| Grafana and provisioning | Both datasource UIDs resolve and both dashboards can query their views. |
