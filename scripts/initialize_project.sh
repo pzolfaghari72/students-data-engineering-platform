@@ -82,7 +82,7 @@ log "Generating missing security secrets..."
 
 log "Validating environment configuration..."
 
-"$PROJECT_PYTHON" "$PROJECT_SCRIPTS_DIR/validate_environment.py"
+"$PROJECT_PYTHON" "$PROJECT_SCRIPTS_DIR/validate_environment.py" --mode core
 
 # --------------------------------------------------
 # Step 5: Project directories
@@ -98,7 +98,7 @@ bash "$PROJECT_SCRIPTS_DIR/create_directories.sh"
 
 log "Validating Docker Compose configuration..."
 
-docker compose config --quiet
+docker compose --profile cdc --profile streaming config --quiet
 
 log "Docker Compose configuration is valid."
 

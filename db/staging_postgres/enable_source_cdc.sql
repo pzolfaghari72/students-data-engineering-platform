@@ -1,11 +1,13 @@
 /*
     Run this script only as an authorized SQL Server database administrator,
-    connected to the Students source database after reviewing the table list.
+    through sqlcmd with SourceDatabase and SourceSchema set for the intended source.
     SQL Server Agent must be running for CDC capture jobs to advance.
 */
 
-IF DB_NAME() <> N'Students'
-    THROW 51000, 'Connect to the Students source database before enabling CDC.', 1;
+IF DB_NAME() <> N'$(SourceDatabase)'
+    THROW 51000, 'Connect to the configured source database before enabling CDC.', 1;
+
+DECLARE @source_schema SYSNAME = N'$(SourceSchema)';
 
 IF NOT EXISTS (
     SELECT 1
@@ -46,16 +48,16 @@ FETCH NEXT FROM source_tables INTO @table_name;
 
 WHILE @@FETCH_STATUS = 0
 BEGIN
-    IF OBJECT_ID(QUOTENAME(N'dbo') + N'.' + QUOTENAME(@table_name), N'U') IS NULL
-        THROW 51001, 'An assessed source table is missing from dbo.', 1;
+    IF OBJECT_ID(QUOTENAME(@source_schema) + N'.' + QUOTENAME(@table_name), N'U') IS NULL
+        THROW 51001, 'An assessed source table is missing from the configured schema.', 1;
 
     IF NOT EXISTS (
         SELECT 1
         FROM cdc.change_tables
-        WHERE source_object_id = OBJECT_ID(QUOTENAME(N'dbo') + N'.' + QUOTENAME(@table_name))
+        WHERE source_object_id = OBJECT_ID(QUOTENAME(@source_schema) + N'.' + QUOTENAME(@table_name))
     )
         EXEC sys.sp_cdc_enable_table
-            @source_schema = N'dbo',
+            @source_schema = @source_schema,
             @source_name = @table_name,
             @role_name = N'students_debezium_cdc_reader',
             @supports_net_changes = 0;

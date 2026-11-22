@@ -1,5 +1,5 @@
 
-"""Load the PostgreSQL staging snapshot into ClickHouse."""
+"""Load an explicitly selected PostgreSQL staging snapshot into ClickHouse."""
 
 from datetime import UTC, datetime, timedelta
 
@@ -13,6 +13,7 @@ from airflow.sdk import dag
     schedule=None,
     start_date=datetime(2024, 1, 1, tzinfo=UTC),
     catchup=False,
+    is_paused_upon_creation=False,
     max_active_runs=1,
     default_args={
         "retries": 0,
@@ -22,8 +23,6 @@ from airflow.sdk import dag
 )
 def postgres_to_clickhouse_warehouse():
 
-    # warehouse-safety-patch-v1
-    # Keep schedule=None: periodic snapshot republishing is NOT CDC/SCD Type 2.
     verify_runtime = BashOperator(
         task_id="verify_spark_runtime",
         bash_command=(
@@ -41,16 +40,18 @@ def postgres_to_clickhouse_warehouse():
         bash_command=(
             "spark-submit "
             "--py-files /opt/spark-apps/warehouse_keys.py "
-            "--master 'local[2]' "
-            "--driver-memory 768m "
+            '--master "$SPARK_BATCH_MASTER" '
+            '--driver-memory "$SPARK_BATCH_DRIVER_MEMORY" '
             "--conf spark.jars.ivy=/tmp/.ivy2 "
             "--conf spark.ui.showConsoleProgress=false "
-            "--conf spark.sql.shuffle.partitions=2 "
+            '--conf "spark.sql.shuffle.partitions=$SPARK_BATCH_SHUFFLE_PARTITIONS" '
             "--packages "
             "org.postgresql:postgresql:42.7.5,"
             "com.clickhouse:clickhouse-jdbc-all:0.9.8 "
-            "/opt/spark-apps/load_warehouse.py"
+            '/opt/spark-apps/load_warehouse.py --source-run-id "$SOURCE_RUN_ID"'
         ),
+        env={"SOURCE_RUN_ID": "{{ dag_run.conf.get('source_run_id', '') }}"},
+        append_env=True,
         retries=1,
         retry_delay=timedelta(minutes=5),
         execution_timeout=timedelta(hours=4),

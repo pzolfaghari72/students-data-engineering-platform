@@ -1,0 +1,146 @@
+{
+  "uid": "students-live-cdc",
+  "title": "Live Student Analytics — CDC",
+  "schemaVersion": 39,
+  "tags": [
+    "students",
+    "cdc"
+  ],
+  "editable": false,
+  "timezone": "utc",
+  "refresh": "30s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "links": [
+    {
+      "title": "Batch snapshot analytics",
+      "type": "link",
+      "url": "/d/students-enrollment-kpis",
+      "keepTime": false
+    }
+  ],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Current source totals",
+      "type": "stat",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-cdc"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-cdc"
+          },
+          "rawSql": "SELECT enrollments, offerings, applications, students, offered_seats, graded_enrollments FROM cdc_business_kpis",
+          "queryType": "table",
+          "format": 1,
+          "editorType": "sql"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No published data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none"
+      },
+      "description": "Latest verified CDC generation. Counts reflect source rows, including repeated student-course enrollment attempts."
+    },
+    {
+      "id": 2,
+      "title": "CDC progress and freshness",
+      "type": "table",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-cdc"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 24,
+        "h": 6
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-cdc"
+          },
+          "rawSql": "SELECT generation_id, active_generation, status, last_verified_at,\n    if(bootstrap_records = 0 AND status = 'ACTIVE', 100, round(100 * verified_bootstrap_records / greatest(bootstrap_records, 1), 1)) AS bootstrap_percent,\n    offsets_behind_at_last_batch, last_live_processing_delay_ms\n    FROM cdc_pipeline_health",
+          "queryType": "table",
+          "format": 1,
+          "editorType": "sql"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No published data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "description": "Lag is sampled when Spark seals a batch. During source inactivity, verify the Spark query and Connect task with the runbook."
+    },
+    {
+      "id": 3,
+      "title": "Latest batch publication",
+      "type": "table",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-warehouse"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 24,
+        "h": 5
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-warehouse"
+          },
+          "rawSql": "SELECT source_run_id, snapshot_started_at, completed_at FROM batch_publication_status",
+          "queryType": "table",
+          "format": 1,
+          "editorType": "sql"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "No published data"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    }
+  ]
+}

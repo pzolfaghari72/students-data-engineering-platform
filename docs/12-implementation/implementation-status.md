@@ -1,32 +1,24 @@
-# Implementation Status
+# Implementation and validation status
 
-**Evidence cut-off: 2026-11-21.** This is a **point-in-time local training-project assessment**, not a live probe or production certification. It supersedes the old current-status summaries for the same components, while the [2026-11-16 final project report](./final-project-report.md) remains a historical record. See [Validation Update](../13-validation/validation-update-2026-11-21.md).
+**Evidence date — 22 November 2026**
 
-| Component | Status | Evidence | Still to verify / implement |
-| --- | --- | --- | --- |
-| SQL Server source | Full snapshot staging previously succeeded | Successful full staging batches for 15 tables and populated warehouse | Fresh source settings / change-test permissions not independently checked in latest report |
-| PostgreSQL batch staging | Implemented, populated | Healthy container, full run / batches and `raw` schema evidence | Fresh same-boundary source reconciliation / retention |
-| Airflow batch | Running, DAGs parse | API healthy; scheduler / DAG processor running; no local import errors | Actual post-patch warehouse task execution not proven by runtime preflight alone |
-| Spark batch runtime | Prerequisites verified | Java 17 and Spark 3.5.6 in Airflow scheduler; scripts readable | Controlled run results and publication evidence with locally patched code |
-| ClickHouse batch warehouse | Implemented, populated | Published analytical views: 3,724,654 enrollments, 59,279 offerings, 600,000 applications | New incremental/SCD2 analytical refresh is not implemented |
-| Kafka and Kafka Connect | Healthy in combined local report | Services running; 15 source-topic boundaries processed | Verify current connector and task status directly when needed |
-| Spark CDC streaming | Running with progress | Kafka offset progression and CDC event writes; initial snapshot offsets later reached 100% | Active generation publication and subsequent `c/u/d` behavior |
-| PostgreSQL CDC history | Populated | `history.cdc_events`, `metadata.streaming_generations` with boundary captured and complete | Reconcile historical event counts by generation and offset if needed |
-| Legacy PostgreSQL SCD2 | Implemented alternative, not active | `scd.entity_versions` logic in Airflow CDC consumer | Keep its DAG paused while Spark CDC consumes source events |
-| ClickHouse CDC event model | Populated, generation publication unconfirmed | `cdc_events` had increasing records; 14/15 table counts matched PG at one snapshot; `CourseOfferings` historical difference needs lineage comparison | Active generation, current-state/Student SCD2 projection, change and replay verification |
-| Grafana | Operational datasource | ClickHouse datasource health OK; 18-panel dashboard described in saved dashboard export | Verify provisioned number formatting and future freshness requirements |
-| Automatic incremental analytical warehouse | **Not implemented** | Batch Spark reads latest successful **full** run | Design CDC delta source, versions, deletes, facts, watermark, retry-safe publish, then schedule |
-| Automated end-to-end tests | Partial | Dated unit tests / health report exist | Source-controlled change/replay and SCD2 integration tests |
-| Backup/restore | Not established | Named volumes persist | Verify engine-specific backups before treating data as durable |
+The repository implements the independent batch and live CDC paths described in the [architecture](../02-architecture/architecture-overview.md). The controlled tests used the pinned images with disposable data. The running installation still has the legacy CDC generation and checkpoint.
 
-## Warehouse DAG local patch versus GitHub
+| Validation | Result |
+|---|---|
+| Host unit and static checks | 25 unit tests passed. Compose interpolation, environment modes, installed Python dependency consistency, syntax and dashboard datasource references were checked. |
+| Airflow | The two supported batch DAGs parsed with zero import errors in the running Airflow image. |
+| Source readiness | The configured SQL Server reader connected, reported snapshot isolation `ON` and database CDC enabled, and saw 15 capture instances. Agent and job-retention queries returned SQLSTATE `42000` for this reader and require DBA evidence. |
+| Spark Batch | A synthetic staging run published through pinned Spark and the real PostgreSQL and ClickHouse JDBC libraries. It selected run 1 while run 2 existed, validated persisted results and skipped a repeated publication. A separate run published the all-empty fixture and verified its zero counts. |
+| ClickHouse SQL | Synthetic batch and CDC publication assertions passed in ClickHouse 24.8. They cover no visibility before publication, source-run precedence, verified CDC batches, baseline filtering, logical replay, deletes and current state. |
+| Spark CDC | The disposable Kafka → Spark → ClickHouse fixture passed. It injected a failure after the ClickHouse microbatch was sealed, resumed the same checkpoint, and produced five logical events from seven Kafka records with the expected delete, reinsert and offering update. Its Connect offset response was a fixture. |
+| Grafana and reconciliation | Both datasources and dashboards provisioned in an isolated Grafana process. Its ClickHouse plugin queried the live CDC KPI definition using fixture data. The restricted reader could not select raw event images. The cross-database reconciliation query also executed. |
+| Legacy baseline check | The existing connector and task were running. Kafka reported 15 partitions and 4,623,487 retained records from offset zero. Legacy batch and CDC snapshot counts matched for 600,000 applications, 59,279 offerings and 3,724,654 enrollments. The comparison covers counts at those historical boundaries. |
 
-A locally applied safety update added Airflow `verify_spark_runtime` and a guard in `spark/load_warehouse.py` to skip an already published full run. It retained `schedule=None`. The GitHub default branch may not yet contain these uncommitted local changes; synchronize source and docs before sharing the project as a reproducible end state.
+A combined test attempt reached batch publication and then an OOM restart interrupted its empty-run check. ClickHouse recovered to healthy, and the empty case passed when tested alone. The obsolete Spark batch Compose service, its inactive container, and the disposable fixture resources were removed.
 
-## Current next milestones
+## Live acceptance remaining
 
-1. Confirm **PostgreSQL generation `ACTIVE`** and ClickHouse published/active stream generation after the initial snapshot reached `snapshot_events_complete=t` and 100% offsets. Last supplied status was still `BOOTSTRAPPING`.
-2. Test controlled Kafka/source change operations and retry/replay correctness, without resetting checkpoints.
-3. Decide whether the training project requires **incremental analytical SCD2**. If yes, implement it as a distinct, safe loader before enabling periodic Airflow scheduling.
+A fresh full extract from the external source through the new Airflow DAG chain, repeatable source mutations through Debezium, and replay of the complete retained source into the new CDC database have not been executed. The external source was accessed read-only. The active legacy connector, topics, warehouse objects, PostgreSQL CDC tables, volumes and Spark checkpoint remain available for rollback. Follow the [cutover runbook](../10-operations/operational-runbook.md) before switching Grafana or retiring that state.
 
-Older readiness reports that state the connector was absent, Spark never started, or ClickHouse CDC was empty describe the earlier date and are **not** current findings.
+The [21 November record](../13-validation/validation-update-2026-11-21.md) describes the earlier deployment. The [acceptance checklist](../09-development-and-testing/integration-testing.md) describes how to reproduce the current tests and record the source-specific results.

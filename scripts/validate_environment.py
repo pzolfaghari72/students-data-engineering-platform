@@ -1,455 +1,138 @@
 #!/usr/bin/env python3
-"""Validate project environment settings and local security secrets."""
+"""Validate local settings without emitting their values."""
 
-from __future__ import annotations
-
-import base64
-import binascii
+import argparse
+import os
 import re
-import sys
 from pathlib import Path
 
 from dotenv import dotenv_values
 
-
-# --------------------------------------------------
-# Project configuration
-# --------------------------------------------------
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-ENV_FILE = PROJECT_ROOT / ".env"
-
-
-# --------------------------------------------------
-# Required environment variables
-# --------------------------------------------------
-
-REQUIRED_VARIABLES = [
-    # Project
-    "PROJECT_NAME",
-    "TIMEZONE",
-
-    # Source SQL Server
-    "SOURCE_DB_HOST",
-    "SOURCE_DB_PORT",
-    "SOURCE_DB_NAME",
-    "SOURCE_DB_SCHEMA",
-    "SOURCE_DB_USER",
-    "SOURCE_DB_PASSWORD",
-    "SOURCE_DB_ODBC_DRIVER",
-    "SOURCE_DB_ENCRYPT",
-    "SOURCE_DB_TRUST_SERVER_CERTIFICATE",
-    "SOURCE_DB_CONNECTION_TIMEOUT",
-    "SOURCE_DB_SNAPSHOT_ISOLATION",
-
-    # PostgreSQL administration
-    "POSTGRES_BOOTSTRAP_DB",
-    "POSTGRES_ADMIN_USER",
-    "POSTGRES_ADMIN_PASSWORD",
-
-    # PostgreSQL staging
-    "STAGING_DB_NAME",
-    "STAGING_DB_USER",
-    "STAGING_DB_PASSWORD",
-
-    # Airflow metadata database
-    "AIRFLOW_DB_NAME",
-    "AIRFLOW_DB_USER",
-    "AIRFLOW_DB_PASSWORD",
-
-    # ClickHouse administration
-    "CLICKHOUSE_ADMIN_USER",
-    "CLICKHOUSE_ADMIN_PASSWORD",
-    "CLICKHOUSE_HOST",
-    "CLICKHOUSE_HTTP_PORT",
-    "CLICKHOUSE_NATIVE_PORT",
-
-    # ClickHouse warehouse
-    "WAREHOUSE_DB_NAME",
-    "WAREHOUSE_DB_USER",
-    "WAREHOUSE_DB_PASSWORD",
-    "WAREHOUSE_JDBC_DRIVER",
-    "STAGING_JDBC_DRIVER",
-    "STUDENT_ID_HMAC_KEY",
-
-    # Grafana
-    "GRAFANA_ADMIN_USER",
-    "GRAFANA_ADMIN_PASSWORD",
-    "GRAFANA_DB_USER",
-    "GRAFANA_DB_PASSWORD",
-
-    # Airflow security
-    "AIRFLOW_JWT_SECRET",
-    "AIRFLOW__CORE__FERNET_KEY",
-    "AIRFLOW__API__SECRET_KEY",
-
-    # Airflow administrator
-    "AIRFLOW_ADMIN_USER",
-    "AIRFLOW_ADMIN_PASSWORD",
-    "AIRFLOW_ADMIN_EMAIL",
-
-    # Airflow network
-    "POSTGRES_HOST",
-    "POSTGRES_CONTAINER_PORT",
-    "KAFKA_HOST",
-    "KAFKA_INTERNAL_PORT",
-    "KAFKA_CONTROLLER_PORT",
-    "KAFKA_EXTERNAL_PORT",
-    "KAFKA_EXTERNAL_ADVERTISED_HOST",
-    "CONNECT_HOST",
-    "CONNECT_INTERNAL_PORT",
-    "CONNECT_METRICS_PORT",
-    "CONNECTOR_HEALTH_TIMEOUT_SECONDS",
-    "DEBEZIUM_CONNECTOR_NAME",
-    "DEBEZIUM_TOPIC_PREFIX",
-    "DEBEZIUM_SCHEMA_HISTORY_TOPIC",
-    "DEBEZIUM_SNAPSHOT_MODE",
-    "AIRFLOW_API_SERVER_URL",
-    "STREAMING_APP_NAME",
-    "STREAMING_QUERY_NAME",
-    "STREAMING_CHECKPOINT_DIR",
-    "STREAMING_MAX_OFFSETS_PER_TRIGGER",
-    "STREAMING_KAFKA_GROUP_ID",
-    "WAREHOUSE_WRITE_BATCH_SIZE",
-    "KAFKA_TOPIC_RETENTION_MS",
-    "KAFKA_NUM_PARTITIONS",
-    "KAFKA_HEAP_OPTS",
-    "CONNECT_HEAP_OPTS",
-]
+ROOT = Path(__file__).resolve().parents[1]
+CORE = """
+POSTGRES_HOST POSTGRES_CONTAINER_PORT POSTGRES_BOOTSTRAP_DB POSTGRES_ADMIN_USER
+POSTGRES_ADMIN_PASSWORD STAGING_DB_NAME STAGING_DB_USER STAGING_DB_PASSWORD
+AIRFLOW_DB_NAME AIRFLOW_DB_USER AIRFLOW_DB_PASSWORD CLICKHOUSE_HOST CLICKHOUSE_HTTP_PORT
+CLICKHOUSE_NATIVE_PORT CLICKHOUSE_ADMIN_USER CLICKHOUSE_ADMIN_PASSWORD WAREHOUSE_DB_NAME
+WAREHOUSE_DB_USER WAREHOUSE_DB_PASSWORD GRAFANA_DB_USER GRAFANA_DB_PASSWORD
+GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD
+""".split()
+SOURCE = """
+SOURCE_DB_HOST SOURCE_DB_PORT SOURCE_DB_NAME SOURCE_DB_SCHEMA
+SOURCE_DB_ENCRYPT SOURCE_DB_TRUST_SERVER_CERTIFICATE
+""".split()
+BATCH = """
+SOURCE_DB_USER SOURCE_DB_PASSWORD SOURCE_DB_ODBC_DRIVER SOURCE_DB_CONNECTION_TIMEOUT
+SOURCE_DB_SNAPSHOT_ISOLATION STUDENT_ID_HMAC_KEY STAGING_JDBC_DRIVER WAREHOUSE_JDBC_DRIVER
+AIRFLOW__CORE__FERNET_KEY AIRFLOW_JWT_SECRET AIRFLOW__API__SECRET_KEY AIRFLOW_ADMIN_USER
+AIRFLOW_ADMIN_PASSWORD AIRFLOW_ADMIN_EMAIL AIRFLOW_API_SERVER_URL
+""".split()
+CDC_DEFAULTS = {
+    "CDC_DB_NAME": "students_cdc",
+    "CDC_DB_USER": "students_cdc_writer",
+    "CDC_CHECKPOINT_DIR": "/opt/spark/checkpoints/students-cdc-warehouse",
+    "STREAMING_GENERATION_ID": "students-cdc-v1",
+    "STREAMING_TRIGGER_INTERVAL": "5 seconds",
+    "STREAMING_BOOTSTRAP_TIMEOUT_SECONDS": "3600",
+    "STREAMING_MAX_OFFSETS_PER_TRIGGER": "10000",
+    "KAFKA_NUM_PARTITIONS": "1",
+    "KAFKA_TOPIC_RETENTION_MS": "604800000",
+    "CONNECTOR_HEALTH_TIMEOUT_SECONDS": "120",
+    "DEBEZIUM_SNAPSHOT_MODE": "initial",
+    "DEBEZIUM_SNAPSHOT_ISOLATION_MODE": "snapshot",
+}
+PLACEHOLDER = ("CHANGE_ME", "GENERATE_")
 
 
-# --------------------------------------------------
-# Validation configuration
-# --------------------------------------------------
+def validate_environment(values, mode):
+    checks = CORE.copy()
+    if mode in ("batch", "all"):
+        checks += SOURCE + BATCH
+    if mode in ("cdc", "all"):
+        checks += SOURCE + ["CDC_DB_PASSWORD"]
+        for field in ("USER", "PASSWORD"):
+            override = f"SOURCE_CDC_{field}"
+            checks.append(override if values.get(override) else f"SOURCE_DB_{field}")
 
-PLACEHOLDER_PREFIXES = (
-    "CHANGE_ME",
-    "GENERATE_",
-)
+    errors = []
+    for name in sorted(set(checks)):
+        value = values.get(name, "").strip()
+        if not value or value.startswith(PLACEHOLDER):
+            errors.append(f"Set a value for {name}.")
 
-BOOLEAN_VARIABLES = [
-    "SOURCE_DB_ENCRYPT",
-    "SOURCE_DB_TRUST_SERVER_CERTIFICATE",
-]
+    for name, value in values.items():
+        if name.endswith("_PORT") and value and (not value.isdecimal() or not 1 <= int(value) <= 65535):
+            errors.append(f"{name} must be a valid TCP port.")
+    for name in ("SOURCE_DB_ENCRYPT", "SOURCE_DB_TRUST_SERVER_CERTIFICATE"):
+        if values.get(name) and values[name].lower() not in {"yes", "no", "true", "false"}:
+            errors.append(f"{name} must be a boolean.")
+    if mode in ("batch", "all") and values.get("SOURCE_DB_SNAPSHOT_ISOLATION") != "SNAPSHOT":
+        errors.append("SOURCE_DB_SNAPSHOT_ISOLATION must be SNAPSHOT.")
+    if mode in ("batch", "all"):
+        if not re.fullmatch(r"[A-Za-z0-9_-]{43}=", values.get("AIRFLOW__CORE__FERNET_KEY", "")):
+            errors.append("AIRFLOW__CORE__FERNET_KEY must encode a 32-byte Fernet key.")
+        for name in ("AIRFLOW_JWT_SECRET", "AIRFLOW__API__SECRET_KEY"):
+            if len(values.get(name, "")) < 32:
+                errors.append(f"{name} must contain at least 32 characters.")
+    if mode in ("cdc", "all"):
+        checkpoint = Path(values["CDC_CHECKPOINT_DIR"])
+        root = Path("/opt/spark/checkpoints")
+        if root not in checkpoint.parents or ".." in checkpoint.parts:
+            errors.append("CDC_CHECKPOINT_DIR must be under /opt/spark/checkpoints.")
+        if checkpoint == Path(values.get("STREAMING_CHECKPOINT_DIR", "/opt/spark/checkpoints/students-cdc")):
+            errors.append("CDC_CHECKPOINT_DIR must be different from the legacy stream checkpoint.")
+        if values["DEBEZIUM_SNAPSHOT_MODE"] != "initial":
+            errors.append("DEBEZIUM_SNAPSHOT_MODE must be initial.")
+        if values["DEBEZIUM_SNAPSHOT_ISOLATION_MODE"] not in {"snapshot", "repeatable_read"}:
+            errors.append("Set DEBEZIUM_SNAPSHOT_ISOLATION_MODE to snapshot or repeatable_read.")
+        if not values["STREAMING_GENERATION_ID"].strip():
+            errors.append("Set a nonempty STREAMING_GENERATION_ID.")
+        if not re.fullmatch(r"[1-9]\d* (?:milliseconds?|seconds?|minutes?)", values["STREAMING_TRIGGER_INTERVAL"]):
+            errors.append("STREAMING_TRIGGER_INTERVAL must be a positive Spark processing interval.")
 
-PORT_VARIABLES = [
-    "SOURCE_DB_PORT",
-    "POSTGRES_CONTAINER_PORT",
-    "CLICKHOUSE_HTTP_PORT",
-    "CLICKHOUSE_NATIVE_PORT",
-    "KAFKA_INTERNAL_PORT",
-    "KAFKA_CONTROLLER_PORT",
-    "KAFKA_EXTERNAL_PORT",
-    "CONNECT_INTERNAL_PORT",
-    "CONNECT_METRICS_PORT",
-]
+        for name in ("STREAMING_BOOTSTRAP_TIMEOUT_SECONDS", "STREAMING_MAX_OFFSETS_PER_TRIGGER",
+                     "KAFKA_NUM_PARTITIONS", "KAFKA_TOPIC_RETENTION_MS", "CONNECTOR_HEALTH_TIMEOUT_SECONDS"):
+            value = values[name]
+            if not value.isdecimal() or int(value) < 1:
+                errors.append(f"{name} must be a positive integer.")
+    if values.get("SOURCE_DB_CONNECTION_TIMEOUT"):
+        value = values["SOURCE_DB_CONNECTION_TIMEOUT"]
+        if not value.isdecimal() or int(value) < 1:
+            errors.append("SOURCE_DB_CONNECTION_TIMEOUT must be a positive integer.")
+    for name in ("SPARK_BATCH_READ_PARTITIONS", "SPARK_BATCH_SHUFFLE_PARTITIONS",
+                 "SPARK_BATCH_FETCH_SIZE", "SPARK_BATCH_WRITE_SIZE",
+                 "SPARK_STREAM_SHUFFLE_PARTITIONS", "CLICKHOUSE_DASHBOARD_GROUP_BY_BYTES"):
+        value = values.get(name)
+        if value is not None and (not value.isdecimal() or int(value) < 1):
+            errors.append(f"{name} must be a positive integer.")
 
-VALID_BOOLEAN_VALUES = {"yes", "no", "true", "false"}
-
-
-# --------------------------------------------------
-# Environment loading
-# --------------------------------------------------
-
-def read_environment_file() -> dict[str, str]:
-    """Read environment variables from the repository .env file."""
-
-    values = dotenv_values(ENV_FILE)
-
-    return {
-        key: value
-        for key, value in values.items()
-        if value is not None
-    }
-
-
-# --------------------------------------------------
-# Required variable validation
-# --------------------------------------------------
-
-def validate_required_variables(
-    values: dict[str, str],
-) -> list[str]:
-    """Check required variables and detect placeholder values."""
-
-    errors: list[str] = []
-
-    for variable in REQUIRED_VARIABLES:
-
-        value = values.get(variable, "").strip()
-
-        if not value:
-            errors.append(
-                f"Missing required variable: {variable}"
-            )
-            continue
-
-        if value.startswith(PLACEHOLDER_PREFIXES):
-            errors.append(
-                f"Placeholder value detected: {variable}"
-            )
-
+    for group in (("WAREHOUSE_DB_NAME", "CDC_DB_NAME"),
+                  ("WAREHOUSE_DB_USER", "CDC_DB_USER", "GRAFANA_DB_USER")):
+        identifiers = [values.get(name, "") for name in group]
+        if len(set(identifiers)) != len(identifiers) or any(
+            not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) for name in identifiers
+        ):
+            errors.append(f"Use distinct ClickHouse identifiers for {', '.join(group)}.")
     return errors
 
 
-# --------------------------------------------------
-# Boolean validation
-# --------------------------------------------------
-
-def validate_boolean_variables(
-    values: dict[str, str],
-) -> list[str]:
-    """Validate environment variables expected to contain Boolean values."""
-
-    errors: list[str] = []
-
-    for variable in BOOLEAN_VARIABLES:
-
-        value = values.get(variable, "").lower()
-
-        if value and value not in VALID_BOOLEAN_VALUES:
-            errors.append(
-                f"Invalid Boolean value configured for {variable}."
-            )
-
-    return errors
-
-
-# --------------------------------------------------
-# Port validation
-# --------------------------------------------------
-
-def validate_ports(
-    values: dict[str, str],
-) -> list[str]:
-    """Validate configured TCP ports."""
-
-    errors: list[str] = []
-
-    for variable in PORT_VARIABLES:
-
-        value = values.get(variable, "")
-
-        if not value:
-            continue
-
-        try:
-            port = int(value)
-
-            if not 1 <= port <= 65535:
-                raise ValueError
-
-        except ValueError:
-            errors.append(
-                f"Invalid TCP port configured for {variable}."
-            )
-
-    return errors
-
-
-# --------------------------------------------------
-# Connection timeout validation
-# --------------------------------------------------
-
-def validate_connection_timeout(
-    values: dict[str, str],
-) -> list[str]:
-    """Validate SQL Server connection timeout."""
-
-    errors: list[str] = []
-
-    variable = "SOURCE_DB_CONNECTION_TIMEOUT"
-    value = values.get(variable, "")
-
-    if not value:
-        return errors
-
-    try:
-        timeout = int(value)
-
-        if timeout <= 0:
-            raise ValueError
-
-    except ValueError:
-        errors.append(
-            f"Invalid positive integer configured for {variable}."
-        )
-
-    return errors
-
-
-def validate_snapshot_isolation(values: dict[str, str]) -> list[str]:
-    """Require the isolation mode used for a consistent multi-table extract."""
-    value = values.get("SOURCE_DB_SNAPSHOT_ISOLATION", "")
-    if value != "SNAPSHOT":
-        return ["SOURCE_DB_SNAPSHOT_ISOLATION must be SNAPSHOT."]
-    return []
-
-
-def validate_streaming_limits(values: dict[str, str]) -> list[str]:
-    """Validate positive integer settings used to bound stream resources."""
-    errors: list[str] = []
-    for variable in (
-        "CONNECTOR_HEALTH_TIMEOUT_SECONDS",
-        "STREAMING_MAX_OFFSETS_PER_TRIGGER",
-        "WAREHOUSE_WRITE_BATCH_SIZE",
-        "KAFKA_TOPIC_RETENTION_MS",
-        "KAFKA_NUM_PARTITIONS",
-    ):
-        try:
-            if int(values.get(variable, "")) <= 0:
-                raise ValueError
-        except ValueError:
-            errors.append(f"{variable} must be a positive integer.")
-    if len(values.get("STUDENT_ID_HMAC_KEY", "")) < 32:
-        errors.append("STUDENT_ID_HMAC_KEY must contain at least 32 characters.")
-    if values.get("DEBEZIUM_SNAPSHOT_MODE") != "initial":
-        errors.append("DEBEZIUM_SNAPSHOT_MODE must be initial.")
-    return errors
-
-
-# --------------------------------------------------
-# Fernet key validation
-# --------------------------------------------------
-
-def validate_fernet_key(
-    values: dict[str, str],
-) -> list[str]:
-    """Validate that the Airflow Fernet key decodes to 32 bytes."""
-
-    errors: list[str] = []
-
-    key = values.get("AIRFLOW__CORE__FERNET_KEY", "")
-
-    if not key:
-        return errors
-
-    try:
-        decoded = base64.b64decode(
-            key,
-            altchars=b"-_",
-            validate=True,
-        )
-
-        if len(decoded) != 32:
-            errors.append(
-                "Invalid Airflow Fernet key length."
-            )
-
-    except (binascii.Error, ValueError):
-        errors.append(
-            "Invalid Airflow Fernet key format."
-        )
-
-    return errors
-
-
-# --------------------------------------------------
-# Airflow API secret validation
-# --------------------------------------------------
-
-def validate_api_secret(
-    values: dict[str, str],
-) -> list[str]:
-    """Validate the Airflow API secret key format."""
-
-    errors: list[str] = []
-
-    secret = values.get("AIRFLOW__API__SECRET_KEY", "")
-
-    if secret and not re.fullmatch(
-        r"[0-9a-fA-F]{64}",
-        secret,
-    ):
-        errors.append(
-            "Invalid Airflow API secret key format."
-        )
-
-    return errors
-
-
-# --------------------------------------------------
-# Email validation
-# --------------------------------------------------
-
-def validate_email(
-    values: dict[str, str],
-) -> list[str]:
-    """Perform basic email address format validation."""
-
-    errors: list[str] = []
-
-    email = values.get("AIRFLOW_ADMIN_EMAIL", "")
-
-    if email and not re.fullmatch(
-        r"[^@\s]+@[^@\s]+\.[^@\s]+",
-        email,
-    ):
-        errors.append(
-            "Invalid AIRFLOW_ADMIN_EMAIL format."
-        )
-
-    return errors
-
-
-# --------------------------------------------------
-# Main validation
-# --------------------------------------------------
-
-def validate_environment() -> list[str]:
-    """Run all environment validation checks."""
-
-    if not ENV_FILE.is_file():
-        return [".env file does not exist."]
-
-    values = read_environment_file()
-
-    errors = [
-        *validate_required_variables(values),
-        *validate_boolean_variables(values),
-        *validate_ports(values),
-        *validate_connection_timeout(values),
-        *validate_snapshot_isolation(values),
-        *validate_streaming_limits(values),
-        *validate_fernet_key(values),
-        *validate_api_secret(values),
-        *validate_email(values),
-    ]
-
-    return errors
-
-
-# --------------------------------------------------
-# Application entry point
-# --------------------------------------------------
-
-def main() -> None:
-    """Run validation and return a non-zero status on failure."""
-
-    try:
-        errors = validate_environment()
-
-    except OSError:
-        print(
-            "[ERROR] Unable to read the .env file.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mode", choices=("core", "batch", "cdc", "all"), default="all")
+    args = parser.parse_args()
+    env_file = ROOT / ".env"
+    if not env_file.is_file():
+        parser.error(".env is missing. Copy .env.example or run make init.")
+    values = {**CDC_DEFAULTS, **{k: v for k, v in dotenv_values(env_file).items() if v is not None}}
+    values.update(os.environ)
+    errors = validate_environment(values, args.mode)
     if errors:
-
-        print("[ERROR] Environment validation failed:")
-
         for error in errors:
-            print(f"  - {error}")
-
-        sys.exit(1)
-
-    print("[INFO] Environment validation passed.")
-    print("[INFO] Required variables are configured.")
-    print("[INFO] Security settings are valid.")
-    print("[INFO] Network configuration is valid.")
+            print(error)
+        return 1
+    print(f"Environment validation passed ({args.mode}).")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

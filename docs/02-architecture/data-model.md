@@ -1,38 +1,30 @@
-# Data Model
+# Data model
 
-The SQL Server source has 15 assessed business tables. The current ClickHouse analytical model serves enrollment, offerings, applications, and related dimensions; it does not reproduce all source entities. The source keys below are based on the captured DDL and assessment exports in `db/source_assessment/`, not a new live SQL Server catalog query.
+The [source assessment](../../db/source_assessment/results) contains the historical table inventory, columns, keys, counts, and profiling workbook. The [SQL Server DDL](../../db/source_assessment/source_ddl) records the assessed source contract. The [source relationship diagram](diagrams/source-entity-relationship.png) shows the original relationships.
 
 ## Source and staging
 
-| Subject | Main source keys | Related tables |
-| --- | --- | --- |
-| Students | `Students(StudentId)` | `StudentProfiles`, `Degrees`, `ClassStandings`, `Terms` |
-| Applications | `Applicants(ApplicantId)` | `Terms` |
-| Enrollments | `CourseEnrollments(CourseEnrollmentId)` | `Students`, `CourseOfferings`, `Grades` |
-| Courses | `CourseOfferings(CourseOfferingId)`, `Courses(DepartmentCode, CourseNumber)` | `Departments`, `Terms` |
-| Academic references | `Terms(TermCode)`, `Sessions(SessionCode)`, `Degrees(DegreeId)` | Degree types, levels, requirements, grades, departments |
+The [source mapping](../../airflow/dags/students_staging/source_tables.py) selects 15 business tables. PostgreSQL `raw` preserves source columns with `_batch_id` and `_extracted_at`. Keys are scoped to `_batch_id`, including the composite source key for Courses. Operational metadata lives in `metadata.pipeline_runs`, `metadata.extraction_batches`, and `metadata.table_load_status`. The source row-count and persisted staging row-count checks run before a table is considered complete.
 
-| PostgreSQL schema | Meaning |
-| --- | --- |
-| `raw` | Batch-scoped typed source rows (source key + `_batch_id`) |
-| `metadata` | Full/CDC run metadata, extraction batches, streaming generations / offsets |
-| `history` | CDC event images, source metadata and Kafka-position identity |
-| `scd` | Legacy Airflow CDC SCD2 entity versions; Spark stream does not maintain it |
+## Batch database
 
-## Published ClickHouse batch model
+| Fact view | Grain |
+|---|---|
+| `fact_application` | One source application ID |
+| `fact_course_offering` | One source course offering ID |
+| `fact_course_enrollment` | One source enrollment attempt ID |
 
-The nine dimensions are Applicant, Class Standing, Course, Date, Degree, Department, Grade, Student, and Term. The three facts have these grains:
+Dimensions cover applicant, class standing, course, application date, degree, department, grade, student and term. Student and applicant keys are pseudonymized with a deployment-local HMAC key. Application statistics have no department grain. Enrollment counts represent attempts, and weighted grade points use the assessed source grade scale. The batch warehouse publishes whole snapshots under `snapshot_id`; the current views and `batch_publication_status` resolve the most recent validated source run.
 
-| View | Grain |
-| --- | --- |
-| `fact_application` | One `ApplicantId` row in the selected full snapshot |
-| `fact_course_offering` | One `CourseOfferingId` |
-| `fact_course_enrollment` | One `CourseEnrollmentId` |
+## CDC database
 
-Physical tables use `dim_*_snapshots` / `fact_*_snapshots` with `snapshot_id`. A row in `warehouse_model_loads` is inserted last; current views expose only the latest published snapshot. `StudentProfiles` and `DegreeRequirements` are staged but not part of the 12-table published model. Student and applicant identifiers are pseudonymized; direct identifiers are not included in the published model.
+| Object | Role |
+|---|---|
+| `cdc_events` | Restricted transport records with Kafka positions, canonical source keys, envelopes, SQL Server ordering and record fingerprints. |
+| `cdc_generations`, `cdc_batch_commits`, `cdc_publications` | Broker lineage, bootstrap end offsets, verified writes and publication. |
+| `cdc_committed_records`, `cdc_serving_records` | Verified transport data, scoped for serving to the active generation and its completed baseline. |
+| `cdc_logical_events` | One logical event per table, key, operation and source version inside the active generation. |
+| `cdc_current_state` | Latest nondeleted image per table and key. |
+| `cdc_business_kpis`, `cdc_pipeline_health` | Approved Grafana aggregates and publication/progress data. |
 
-## Separate CDC model
-
-ClickHouse `cdc_events` preserves streaming envelopes, and CDC views such as `cdc_current_state`, `cdc_course_enrollments`, and `cdc_student_scd2` derive projections once a streaming generation is active. These are not joined into the standard batch fact/dimension views. Snapshot IDs are **not** row-level SCD2 validity intervals.
-
-See [Warehouse Table Guide](../07-data-warehouse/fact-and-dimension-tables.md) and [SCD Type 2](../07-data-warehouse/scd-type-2.md).
+The operational event store has no cross-pipeline dependency. Pipelines share an analytical grain for reconciliation of application, offering and enrollment counts. Grafana receives aggregates from CDC and cannot read the row images or keys. Retained events support historical analysis while the current-state projection serves the live dashboard.

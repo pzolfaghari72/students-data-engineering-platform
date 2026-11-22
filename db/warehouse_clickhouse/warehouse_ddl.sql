@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS warehouse_model_loads (
     snapshot_id String,
     source_run_id UInt64,
-    completed_at DateTime64(3, 'UTC'),
+    completed_at DateTime64(3, 'UTC') DEFAULT now64(3, 'UTC'),
     dim_applicant_rows UInt64,
     dim_class_standing_rows UInt64,
     dim_course_rows UInt64,
@@ -17,6 +17,19 @@ CREATE TABLE IF NOT EXISTS warehouse_model_loads (
 )
 ENGINE = MergeTree
 ORDER BY (completed_at, snapshot_id);
+
+ALTER TABLE warehouse_model_loads
+    MODIFY COLUMN completed_at DateTime64(3, 'UTC') DEFAULT now64(3, 'UTC');
+
+ALTER TABLE warehouse_model_loads
+    ADD COLUMN IF NOT EXISTS snapshot_started_at Nullable(DateTime64(3, 'UTC'));
+
+CREATE OR REPLACE VIEW batch_publication_status SQL SECURITY DEFINER AS
+SELECT snapshot_id, source_run_id, snapshot_started_at, completed_at,
+       fact_application_rows, fact_course_offering_rows, fact_enrollment_rows
+FROM warehouse_model_loads
+ORDER BY source_run_id DESC, completed_at DESC, snapshot_id DESC
+LIMIT 1;
 
 CREATE TABLE IF NOT EXISTS dim_applicant_snapshots (
     snapshot_id String,
@@ -178,17 +191,17 @@ CREATE TABLE IF NOT EXISTS fact_enrollment_snapshots (
 ENGINE = MergeTree
 ORDER BY (snapshot_id, term_code, department_code, course_offering_id, course_enrollment_id);
 
-CREATE OR REPLACE VIEW dim_applicant AS
+CREATE OR REPLACE VIEW dim_applicant SQL SECURITY DEFINER AS
 SELECT applicant_key, application_type, application_status
 FROM dim_applicant_snapshots
 WHERE snapshot_id = (
     SELECT snapshot_id
     FROM warehouse_model_loads
-    ORDER BY completed_at DESC, snapshot_id DESC
+    ORDER BY source_run_id DESC, completed_at DESC, snapshot_id DESC
     LIMIT 1
 );
 
-CREATE OR REPLACE VIEW dim_class_standing AS
+CREATE OR REPLACE VIEW dim_class_standing SQL SECURITY DEFINER AS
 SELECT
     class_standing_key,
     class_standing_code,
@@ -200,11 +213,11 @@ FROM dim_class_standing_snapshots
 WHERE snapshot_id = (
     SELECT snapshot_id
     FROM warehouse_model_loads
-    ORDER BY completed_at DESC, snapshot_id DESC
+    ORDER BY source_run_id DESC, completed_at DESC, snapshot_id DESC
     LIMIT 1
 );
 
-CREATE OR REPLACE VIEW dim_course AS
+CREATE OR REPLACE VIEW dim_course SQL SECURITY DEFINER AS
 SELECT
     course_key,
     department_key,
@@ -217,11 +230,11 @@ FROM dim_course_snapshots
 WHERE snapshot_id = (
     SELECT snapshot_id
     FROM warehouse_model_loads
-    ORDER BY completed_at DESC, snapshot_id DESC
+    ORDER BY source_run_id DESC, completed_at DESC, snapshot_id DESC
     LIMIT 1
 );
 
-CREATE OR REPLACE VIEW dim_date AS
+CREATE OR REPLACE VIEW dim_date SQL SECURITY DEFINER AS
 SELECT
     date_key,
     calendar_date,
@@ -236,11 +249,11 @@ FROM dim_date_snapshots
 WHERE snapshot_id = (
     SELECT snapshot_id
     FROM warehouse_model_loads
-    ORDER BY completed_at DESC, snapshot_id DESC
+    ORDER BY source_run_id DESC, completed_at DESC, snapshot_id DESC
     LIMIT 1
 );
 
-CREATE OR REPLACE VIEW dim_degree AS
+CREATE OR REPLACE VIEW dim_degree SQL SECURITY DEFINER AS
 SELECT
     degree_key,
     degree_id,
@@ -255,31 +268,31 @@ FROM dim_degree_snapshots
 WHERE snapshot_id = (
     SELECT snapshot_id
     FROM warehouse_model_loads
-    ORDER BY completed_at DESC, snapshot_id DESC
+    ORDER BY source_run_id DESC, completed_at DESC, snapshot_id DESC
     LIMIT 1
 );
 
-CREATE OR REPLACE VIEW dim_department AS
+CREATE OR REPLACE VIEW dim_department SQL SECURITY DEFINER AS
 SELECT department_key, department_code, department_name
 FROM dim_department_snapshots
 WHERE snapshot_id = (
     SELECT snapshot_id
     FROM warehouse_model_loads
-    ORDER BY completed_at DESC, snapshot_id DESC
+    ORDER BY source_run_id DESC, completed_at DESC, snapshot_id DESC
     LIMIT 1
 );
 
-CREATE OR REPLACE VIEW dim_grade AS
+CREATE OR REPLACE VIEW dim_grade SQL SECURITY DEFINER AS
 SELECT grade_key, grade_code, grade_points, include_in_gpa
 FROM dim_grade_snapshots
 WHERE snapshot_id = (
     SELECT snapshot_id
     FROM warehouse_model_loads
-    ORDER BY completed_at DESC, snapshot_id DESC
+    ORDER BY source_run_id DESC, completed_at DESC, snapshot_id DESC
     LIMIT 1
 );
 
-CREATE OR REPLACE VIEW dim_student AS
+CREATE OR REPLACE VIEW dim_student SQL SECURITY DEFINER AS
 SELECT
     student_key,
     student_status,
@@ -290,21 +303,21 @@ FROM dim_student_snapshots
 WHERE snapshot_id = (
     SELECT snapshot_id
     FROM warehouse_model_loads
-    ORDER BY completed_at DESC, snapshot_id DESC
+    ORDER BY source_run_id DESC, completed_at DESC, snapshot_id DESC
     LIMIT 1
 );
 
-CREATE OR REPLACE VIEW dim_term AS
+CREATE OR REPLACE VIEW dim_term SQL SECURITY DEFINER AS
 SELECT term_key, term_code, session_code, session_name, year
 FROM dim_term_snapshots
 WHERE snapshot_id = (
     SELECT snapshot_id
     FROM warehouse_model_loads
-    ORDER BY completed_at DESC, snapshot_id DESC
+    ORDER BY source_run_id DESC, completed_at DESC, snapshot_id DESC
     LIMIT 1
 );
 
-CREATE OR REPLACE VIEW fact_application AS
+CREATE OR REPLACE VIEW fact_application SQL SECURITY DEFINER AS
 SELECT
     applicant_key,
     application_date_key,
@@ -321,11 +334,11 @@ FROM fact_application_snapshots
 WHERE snapshot_id = (
     SELECT snapshot_id
     FROM warehouse_model_loads
-    ORDER BY completed_at DESC, snapshot_id DESC
+    ORDER BY source_run_id DESC, completed_at DESC, snapshot_id DESC
     LIMIT 1
 );
 
-CREATE OR REPLACE VIEW fact_course_offering AS
+CREATE OR REPLACE VIEW fact_course_offering SQL SECURITY DEFINER AS
 SELECT
     course_offering_id,
     course_key,
@@ -340,11 +353,11 @@ FROM fact_course_offering_snapshots
 WHERE snapshot_id = (
     SELECT snapshot_id
     FROM warehouse_model_loads
-    ORDER BY completed_at DESC, snapshot_id DESC
+    ORDER BY source_run_id DESC, completed_at DESC, snapshot_id DESC
     LIMIT 1
 );
 
-CREATE OR REPLACE VIEW fact_course_enrollment AS
+CREATE OR REPLACE VIEW fact_course_enrollment SQL SECURITY DEFINER AS
 SELECT
     course_enrollment_id,
     student_key,
@@ -367,6 +380,6 @@ FROM fact_enrollment_snapshots
 WHERE snapshot_id = (
     SELECT snapshot_id
     FROM warehouse_model_loads
-    ORDER BY completed_at DESC, snapshot_id DESC
+    ORDER BY source_run_id DESC, completed_at DESC, snapshot_id DESC
     LIMIT 1
 );

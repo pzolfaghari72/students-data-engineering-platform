@@ -1,24 +1,16 @@
 /*
-    Read-only SQL Server CDC readiness checks for an authorized DBA.
-
-    Run against the intended Students instance using an authorized DBA session.
-    This script does not enable CDC,
-    change permissions, alter source data, or change database options.
-    Run as sysadmin or a principal allowed to impersonate the connector login.
-    The SQL Server Agent DMV check requires VIEW SERVER STATE.
+Run through sqlcmd in the configured source database with SourceSchema and
+ConnectorLogin variables. The DBA session needs VIEW SERVER STATE and permission
+to impersonate the existing connector login. This script is read-only.
 */
-
-USE [Students];
-GO
 SET NOCOUNT ON;
 
-SELECT
-    DB_NAME() AS database_name,
-    d.is_cdc_enabled,
-    d.snapshot_isolation_state_desc,
-    d.is_read_committed_snapshot_on
-FROM sys.databases AS d
-WHERE d.database_id = DB_ID();
+DECLARE @source_schema SYSNAME = N'$(SourceSchema)';
+DECLARE @connector_login SYSNAME = N'$(ConnectorLogin)';
+
+SELECT name AS database_name, is_cdc_enabled, snapshot_isolation_state_desc
+FROM sys.databases
+WHERE database_id = DB_ID();
 
 DECLARE @expected_tables TABLE (table_name SYSNAME NOT NULL);
 INSERT INTO @expected_tables (table_name)
@@ -39,50 +31,53 @@ VALUES
     (N'Students'),
     (N'Terms');
 
-SELECT
-    expected.table_name,
-    capture.capture_instance,
-    capture.role_name,
-    capture.supports_net_changes
+
+IF OBJECT_ID(N'cdc.change_tables') IS NULL
+BEGIN
+    PRINT N'CDC is disabled or the DBA session cannot inspect its catalog.';
+    RETURN;
+END;
+
+SELECT servicename, status_desc, startup_type_desc
+FROM sys.dm_server_services
+WHERE servicename LIKE N'%SQL Server Agent%';
+
+EXEC sys.sp_cdc_help_jobs;
+
+DECLARE @capture TABLE (
+    table_name SYSNAME,
+    capture_instance SYSNAME,
+    role_name SYSNAME,
+    change_table SYSNAME
+);
+INSERT INTO @capture
+SELECT expected.table_name, capture.capture_instance, capture.role_name,
+       OBJECT_NAME(capture.object_id)
 FROM @expected_tables AS expected
 LEFT JOIN cdc.change_tables AS capture
-    ON capture.source_object_id =
-       OBJECT_ID(QUOTENAME(N'dbo') + N'.' + QUOTENAME(expected.table_name))
-ORDER BY expected.table_name;
+    ON capture.source_object_id = OBJECT_ID(
+        QUOTENAME(@source_schema) + N'.' + QUOTENAME(expected.table_name)
+    );
 
-DECLARE @connector_login SYSNAME = N'<configured connector login>';
+SELECT table_name, capture_instance, role_name,
+       sys.fn_cdc_get_min_lsn(capture_instance) AS retained_start_lsn
+FROM @capture ORDER BY table_name, capture_instance;
+SELECT sys.fn_cdc_get_max_lsn() AS captured_end_lsn;
 
 IF SUSER_ID(@connector_login) IS NULL
-BEGIN
-    PRINT N'Replace @connector_login with the existing Debezium SQL Server login.';
-END
-ELSE
-BEGIN
-    EXECUTE AS LOGIN = @connector_login;
+    THROW 51000, 'ConnectorLogin must identify an existing SQL Server login.', 1;
 
-    SELECT
-        USER_NAME() AS effective_database_user,
-        SUSER_SNAME() AS effective_login,
-        IS_MEMBER(N'students_debezium_cdc_reader') AS is_cdc_reader_member,
-        HAS_PERMS_BY_NAME(DB_NAME(), N'DATABASE', N'VIEW DATABASE STATE')
-            AS has_view_database_state,
-        HAS_PERMS_BY_NAME(DB_NAME(), N'DATABASE', N'VIEW DEFINITION')
-            AS has_view_definition,
-        HAS_PERMS_BY_NAME(NULL, N'SERVER', N'VIEW SERVER STATE')
-            AS has_view_server_state,
-        HAS_PERMS_BY_NAME(N'dbo.Students', N'OBJECT', N'SELECT')
-            AS can_select_source_table,
-        HAS_PERMS_BY_NAME(N'cdc.dbo_Students_CT', N'OBJECT', N'SELECT')
-            AS can_select_cdc_change_table;
+EXECUTE AS LOGIN = @connector_login;
+SELECT
+    table_name,
+    capture_instance,
+    CASE WHEN role_name IS NULL THEN NULL ELSE IS_MEMBER(role_name) END AS capture_role_member,
+    HAS_PERMS_BY_NAME(QUOTENAME(@source_schema) + N'.' + QUOTENAME(table_name), N'OBJECT', N'SELECT')
+        AS source_select,
+    HAS_PERMS_BY_NAME(N'cdc.' + QUOTENAME(change_table), N'OBJECT', N'SELECT') AS change_table_select
+FROM @capture ORDER BY table_name, capture_instance;
 
-    SELECT
-        servicename,
-        status_desc,
-        startup_type_desc
-    FROM sys.dm_server_services
-    WHERE servicename LIKE N'%SQL Server Agent%';
-
-    EXEC sys.sp_cdc_help_jobs;
-
-    REVERT;
-END;
+SELECT HAS_PERMS_BY_NAME(DB_NAME(),N'DATABASE',N'VIEW DATABASE STATE') AS can_view_database_state,
+       HAS_PERMS_BY_NAME(DB_NAME(),N'DATABASE',N'VIEW DEFINITION') AS can_view_definition,
+       HAS_PERMS_BY_NAME(NULL,N'SERVER',N'VIEW SERVER STATE') AS can_view_server_state;
+REVERT;

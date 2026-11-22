@@ -2175,7 +2175,8 @@
     "clickhouse",
     "snapshot",
     "grades",
-    "academic-outcomes"
+    "academic-outcomes",
+    "batch"
   ],
   "templating": {
     "list": [
@@ -2254,7 +2255,7 @@
     ]
   },
   "timezone": "browser",
-  "title": "Student Enrollment, Capacity & Grades",
+  "title": "Batch Snapshot — Student Enrollment, Capacity & Grades",
   "uid": "students-enrollment-kpis",
   "version": 19,
   "weekStart": ""

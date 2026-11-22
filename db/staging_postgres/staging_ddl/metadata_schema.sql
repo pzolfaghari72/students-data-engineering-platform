@@ -178,67 +178,8 @@ CREATE TABLE IF NOT EXISTS metadata.table_load_status
 );
 
 
--- ============================================================
--- 4. EXTRACTION WATERMARKS
--- Stores the last successfully processed checkpoint.
--- ============================================================
-
-CREATE TABLE IF NOT EXISTS metadata.extraction_watermarks
-(
-    source_schema       VARCHAR(128) NOT NULL,
-    source_table        VARCHAR(128) NOT NULL,
-
-    capture_instance    VARCHAR(128) NOT NULL DEFAULT '',
-    watermark_type      VARCHAR(30) NOT NULL,
-
-    last_processed_lsn  BYTEA,
-    last_extracted_at   TIMESTAMPTZ,
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT pk_extraction_watermarks
-        PRIMARY KEY (
-            source_schema,
-            source_table,
-            capture_instance,
-            watermark_type
-        ),
-
-    CONSTRAINT ck_watermark_type
-        CHECK (watermark_type IN ('CDC', 'TIMESTAMP', 'IDENTITY')),
-
-    CONSTRAINT ck_watermark_lsn_length
-        CHECK (
-            last_processed_lsn IS NULL
-            OR OCTET_LENGTH(last_processed_lsn) = 10
-        ),
-
-    CONSTRAINT ck_watermark_cdc_lsn
-        CHECK (
-            watermark_type <> 'CDC'
-            OR last_processed_lsn IS NOT NULL
-        )
-);
-
--- ============================================================
--- 5. KAFKA CONSUMER OFFSETS
--- Offsets commit in PostgreSQL with their corresponding CDC events.
--- ============================================================
-
-CREATE TABLE IF NOT EXISTS metadata.kafka_offsets
-(
-    topic               TEXT NOT NULL,
-    kafka_partition     INTEGER NOT NULL,
-    next_offset         BIGINT NOT NULL,
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT pk_kafka_offsets
-        PRIMARY KEY (topic, kafka_partition),
-
-    CONSTRAINT ck_kafka_offsets_partition
-        CHECK (kafka_partition >= 0),
-
-    CONSTRAINT ck_kafka_offsets_next
-        CHECK (next_offset >= 0)
-);
+ALTER TABLE metadata.extraction_batches
+    ADD COLUMN IF NOT EXISTS source_rows_expected BIGINT
+    CHECK (source_rows_expected >= 0);
 
 COMMIT;

@@ -1,6 +1,6 @@
 # Validation Update - 2026-11-21
 
-**Scope:** Read-only local checks and subsequent user-supplied terminal outputs on 2026-11-21, plus a locally applied warehouse code safety patch. This page records evidence as of the supplied outputs, not a live measurement. It is a **newer status record**, while the historical [2026-11-16 CDC readiness](./cdc-readiness-report.md), [runtime report](./runtime-validation-report.md), and [final project report](../12-implementation/final-project-report.md) should remain unchanged as dated evidence.
+**Scope:** Read-only local checks and subsequent user-supplied terminal outputs on 2026-11-21, plus a locally applied warehouse code safety patch. This page records evidence as of the supplied outputs, not a live measurement. It describes the legacy deployment. See [implementation status](../12-implementation/implementation-status.md) for the current code and later test evidence.
 
 ## Combined health report and stream progress
 

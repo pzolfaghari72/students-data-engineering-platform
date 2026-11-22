@@ -1,8 +1,28 @@
 apiVersion: 1
 
 datasources:
-  - name: Students Warehouse
+  - name: Students Batch Warehouse
     uid: students-warehouse
+    type: grafana-clickhouse-datasource
+    access: proxy
+    isDefault: false
+    editable: false
+    jsonData:
+      host: $GRAFANA_DB_HOST
+      port: $GRAFANA_DB_NATIVE_PORT
+      protocol: native
+      secure: false
+      username: $GRAFANA_DB_USER
+      defaultDatabase: $WAREHOUSE_DB_NAME
+      dialTimeout: "10"
+      queryTimeout: 60
+      maxOpenConns: "4"
+      maxIdleConns: "2"
+    secureJsonData:
+      password: $GRAFANA_DB_PASSWORD
+
+  - name: Students CDC
+    uid: students-cdc
     type: grafana-clickhouse-datasource
     access: proxy
     isDefault: true
@@ -13,7 +33,7 @@ datasources:
       protocol: native
       secure: false
       username: $GRAFANA_DB_USER
-      defaultDatabase: $WAREHOUSE_DB_NAME
+      defaultDatabase: $CDC_DB_NAME
       dialTimeout: "10"
       queryTimeout: 60
       maxOpenConns: "4"

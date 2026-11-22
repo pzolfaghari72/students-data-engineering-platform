@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import argparse
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
 from typing import Any
 
+import clickhouse_connect
 from pyspark import StorageLevel
 from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql.functions import (
     coalesce,
     col,
     concat_ws,
+    count,
+    countDistinct,
     date_format,
     dayofmonth,
     dayofweek,
@@ -25,6 +28,7 @@ from pyspark.sql.functions import (
     quarter,
     sequence,
     sha2,
+    sum as spark_sum,
     udf,
     year,
 )
@@ -58,9 +62,9 @@ REQUIRED_TABLES = {
     "Students",
     "Terms",
 }
-READ_PARTITIONS = 2
-JDBC_FETCH_SIZE = 10_000
-WRITE_BATCH_SIZE = 10_000
+READ_PARTITIONS = int(os.getenv("SPARK_BATCH_READ_PARTITIONS", "2"))
+JDBC_FETCH_SIZE = int(os.getenv("SPARK_BATCH_FETCH_SIZE", "10000"))
+WRITE_BATCH_SIZE = int(os.getenv("SPARK_BATCH_WRITE_SIZE", "10000"))
 
 DIMENSION_TABLES = {
     "dim_applicant_snapshots": "dim_applicant_rows",
@@ -113,31 +117,31 @@ def _read_staging_query(spark: SparkSession, query: str) -> DataFrame:
     ).option("dbtable", f"({query}) AS staging_source").load()
 
 
-def _latest_snapshot_batches(spark: SparkSession) -> tuple[int, dict[str, int]]:
-    latest_run = _read_staging_query(
+def _snapshot_batches(spark: SparkSession, run_id: int) -> tuple[Any, dict[str, int], dict[str, int]]:
+    selected_run = _read_staging_query(
         spark,
-        """
-        SELECT run_id
+        f"""
+        SELECT started_at
         FROM metadata.pipeline_runs
-        WHERE pipeline_name = 'sqlserver_to_postgres_staging'
+        WHERE run_id = {run_id}
+          AND pipeline_name = 'sqlserver_to_postgres_staging'
           AND run_type = 'FULL'
           AND status = 'SUCCESS'
-        ORDER BY completed_at DESC, run_id DESC
-        LIMIT 1
         """,
     ).first()
-    if latest_run is None:
-        raise RuntimeError("No successful full SQL Server snapshot exists in staging.")
+    if selected_run is None:
+        raise RuntimeError(f"Staging run {run_id} is not a successful full snapshot.")
 
-    run_id = int(latest_run["run_id"])
     batches = _read_staging_query(
         spark,
         f"""
-        SELECT source_table, batch_id
+        SELECT source_table, batch_id, source_rows_expected
         FROM metadata.extraction_batches
         WHERE run_id = {run_id}
           AND extraction_type = 'SNAPSHOT'
           AND status = 'SUCCESS'
+          AND source_rows_expected = extracted_rows
+          AND source_rows_expected = inserted_rows
         """,
     ).collect()
     batch_ids = {row["source_table"]: int(row["batch_id"]) for row in batches}
@@ -147,9 +151,10 @@ def _latest_snapshot_batches(spark: SparkSession) -> tuple[int, dict[str, int]]:
             f"Successful snapshot run {run_id} is missing required tables: "
             f"{', '.join(sorted(missing))}."
         )
-    if len(batch_ids) != len(batches):
-        raise RuntimeError(f"Snapshot run {run_id} has duplicate successful batches.")
-    return run_id, batch_ids
+    if len(batch_ids) != len(batches) or len(batch_ids) != 15:
+        raise RuntimeError(f"Snapshot run {run_id} must have 15 reconciled table batches.")
+    source_counts = {row["source_table"]: int(row["source_rows_expected"]) for row in batches}
+    return selected_run["started_at"], batch_ids, source_counts
 
 
 def _read_raw_table(
@@ -187,7 +192,7 @@ def _read_raw_table(
         """,
     ).first()
     if bounds is None or bounds["lower_bound"] is None or bounds["upper_bound"] is None:
-        raise RuntimeError(f"Cannot determine JDBC partition bounds for raw.{table}.")
+        return reader.load()
 
     return (
         reader.option("partitionColumn", "partition_key")
@@ -217,18 +222,6 @@ def _pseudonymizer(secret: str) -> Any:
     return udf(key_for, StringType())
 
 
-def _assert_unique(frame: DataFrame, key: str, label: str) -> None:
-    duplicate_exists = (
-        frame.groupBy(key)
-        .count()
-        .where(col("count") > 1)
-        .limit(1)
-        .count()
-    )
-    if duplicate_exists:
-        raise RuntimeError(f"{label} contains duplicate keys.")
-
-
 def _assert_no_orphans(
     source: DataFrame,
     target: DataFrame,
@@ -245,16 +238,16 @@ def _date_dimension(applicants: DataFrame) -> DataFrame:
         spark_max(col("ApplicationReceivedDate")).alias("last_date"),
     ).first()
     if bounds is None or bounds["first_date"] is None or bounds["last_date"] is None:
-        raise RuntimeError("Applicants has no application-received dates.")
-
-    dates = applicants.sparkSession.createDataFrame(
-        [(bounds["first_date"], bounds["last_date"])],
-        ["first_date", "last_date"],
-    ).select(
-        explode(
-            sequence(col("first_date"), col("last_date"), expr("INTERVAL 1 DAY"))
-        ).alias("calendar_date")
-    )
+        dates = applicants.select(col("ApplicationReceivedDate").alias("calendar_date")).limit(0)
+    else:
+        dates = applicants.sparkSession.createDataFrame(
+            [(bounds["first_date"], bounds["last_date"])],
+            ["first_date", "last_date"],
+        ).select(
+            explode(
+                sequence(col("first_date"), col("last_date"), expr("INTERVAL 1 DAY"))
+            ).alias("calendar_date")
+        )
     return dates.select(
         date_format(col("calendar_date"), "yyyyMMdd")
         .cast("int")
@@ -275,7 +268,7 @@ def _date_dimension(applicants: DataFrame) -> DataFrame:
 def build_warehouse_frames(
     spark: SparkSession,
     batch_ids: dict[str, int],
-) -> tuple[dict[str, DataFrame], dict[str, DataFrame], dict[str, DataFrame]]:
+) -> tuple[dict[str, DataFrame], dict[str, DataFrame]]:
     pseudonymize = _pseudonymizer(os.environ["STUDENT_ID_HMAC_KEY"])
     applicants = _read_raw_table(
         spark, "applicants", batch_ids["Applicants"], "ApplicantId"
@@ -613,23 +606,7 @@ def build_warehouse_frames(
         "fact_course_offering_snapshots": offering_fact,
         "fact_enrollment_snapshots": enrollment_fact,
     }
-    source_frames = {
-        "Applicants": applicants,
-        "ClassStandings": class_standings,
-        "CourseOfferings": offerings,
-        "Courses": courses,
-        "CourseEnrollments": enrollments,
-        "Degrees": degrees,
-        "Departments": departments,
-        "Grades": grades,
-        "Students": students,
-        "Terms": terms,
-    }
-
-    for table, frame in dimensions.items():
-        _assert_unique(frame, DIMENSION_KEYS[table], table)
-
-    return dimensions, facts, source_frames
+    return dimensions, facts
 
 
 def _write_clickhouse(frame: DataFrame, table: str) -> None:
@@ -652,96 +629,90 @@ def _with_snapshot_id(frame: DataFrame, snapshot_id: str) -> DataFrame:
     )
 
 
-# warehouse-safety-patch-v1
+FACT_TOTALS = {
+    "fact_application_snapshots": "application_count",
+    "fact_course_offering_snapshots": "capacity",
+    "fact_enrollment_snapshots": "enrollment_count",
+}
 
 
-def _published_snapshot_exists(spark: SparkSession, source_run_id: int) -> bool:
-    """Fail closed on a warehouse read error; never republish a completed source run."""
-    # source_run_id comes from a PostgreSQL BIGINT, and int() prevents SQL injection.
-    query = (
-        "(SELECT count() AS published_count FROM warehouse_model_loads "
-        f"WHERE source_run_id = {int(source_run_id)}) AS published_check"
-    )
-    result = (
-        spark.read.format("jdbc")
-        .option("url", WAREHOUSE_JDBC_URL)
-        .option("user", WAREHOUSE_DB_USER)
-        .option("password", WAREHOUSE_DB_PASSWORD)
-        .option("driver", WAREHOUSE_DRIVER)
-        .option("dbtable", query)
-        .load()
-        .first()
-    )
-    if result is None:
-        raise RuntimeError("Could not check previous warehouse publications.")
-    return int(result["published_count"]) > 0
+def _frame_expectation(table: str, frame: DataFrame, source_rows: int | None) -> tuple:
+    key = DIMENSION_KEYS[table] if table in DIMENSION_KEYS else FACT_KEYS[table]
+    measure = FACT_TOTALS.get(table)
+    aggregates = [count(lit(1)), countDistinct(key)]
+    if measure:
+        aggregates.append(coalesce(spark_sum(measure), lit(0)))
+    result = tuple(frame.agg(*aggregates).first())
+    if result[0] != result[1]:
+        raise RuntimeError(f"{table} contains duplicate or null grain keys.")
+    if source_rows is not None and result[0] != source_rows:
+        raise RuntimeError(f"{table} produced {result[0]} rows from {source_rows} source rows.")
+    return result
 
 
-def run(spark: SparkSession) -> None:
-    source_run_id, batch_ids = _latest_snapshot_batches(spark)
-    if _published_snapshot_exists(spark, source_run_id):
+def _validate_stored_snapshot(client: Any, snapshot_id: str, table: str, expected: tuple) -> None:
+    key = DIMENSION_KEYS[table] if table in DIMENSION_KEYS else FACT_KEYS[table]
+    measure = FACT_TOTALS.get(table)
+    aggregate = f", sum({measure})" if measure else ""
+    actual = client.query(
+        f"SELECT count(), uniqExact({key}){aggregate} FROM {table} "
+        "WHERE snapshot_id = {snapshot:String}",
+        parameters={"snapshot": snapshot_id},
+    ).first_row
+    if tuple(actual) != expected:
+        raise RuntimeError(
+            f"ClickHouse reconciliation failed for {table}, snapshot {snapshot_id}: "
+            f"expected {expected}, stored {actual}."
+        )
+
+
+def run(spark: SparkSession, client: Any, source_run_id: int) -> None:
+    already_published = client.query(
+        "SELECT count() FROM warehouse_model_loads WHERE source_run_id = {run:UInt64}",
+        parameters={"run": source_run_id},
+    ).first_row[0]
+    if already_published:
         LOGGER.info(
             "Full staging run %s already has a published warehouse snapshot; skipping.",
             source_run_id,
         )
         return
+    snapshot_started_at, batch_ids, source_counts = _snapshot_batches(spark, source_run_id)
     snapshot_id = str(uuid.uuid4())
-    dimensions, facts, sources = build_warehouse_frames(spark, batch_ids)
-
-    cached_frames = [
-        sources["Applicants"],
-        sources["CourseOfferings"],
-        sources["CourseEnrollments"],
-        *facts.values(),
-    ]
-    for frame in cached_frames:
+    dimensions, facts = build_warehouse_frames(spark, batch_ids)
+    frames = {**dimensions, **facts}
+    # Persist the final plans once. The count, grain and measure checks share an action.
+    for frame in frames.values():
         frame.persist(StorageLevel.DISK_ONLY)
 
+    expected_sources = {
+        "dim_applicant_snapshots": "Applicants",
+        "dim_class_standing_snapshots": "ClassStandings",
+        "dim_course_snapshots": "Courses",
+        "dim_degree_snapshots": "Degrees",
+        "dim_department_snapshots": "Departments",
+        "dim_grade_snapshots": "Grades",
+        "dim_student_snapshots": "Students",
+        "dim_term_snapshots": "Terms",
+        "fact_application_snapshots": "Applicants",
+        "fact_course_offering_snapshots": "CourseOfferings",
+        "fact_enrollment_snapshots": "CourseEnrollments",
+    }
     try:
-        expected_fact_rows = {
-            "fact_application_snapshots": sources["Applicants"].count(),
-            "fact_course_offering_snapshots": sources["CourseOfferings"].count(),
-            "fact_enrollment_snapshots": sources["CourseEnrollments"].count(),
+        expected = {
+            table: _frame_expectation(table, frame, source_counts.get(expected_sources.get(table)))
+            for table, frame in frames.items()
         }
-        fact_rows = {table: frame.count() for table, frame in facts.items()}
-        for table, expected_rows in expected_fact_rows.items():
-            if fact_rows[table] != expected_rows:
-                raise RuntimeError(
-                    f"{table} produced {fact_rows[table]} rows from "
-                    f"{expected_rows} source rows; refusing to publish."
-                )
-            _assert_unique(facts[table], FACT_KEYS[table], table)
-
-        dimension_rows = {table: frame.count() for table, frame in dimensions.items()}
-        expected_dimension_rows = {
-            "dim_applicant_snapshots": sources["Applicants"].count(),
-            "dim_class_standing_snapshots": sources["ClassStandings"].count(),
-            "dim_course_snapshots": sources["Courses"].count(),
-            "dim_degree_snapshots": sources["Degrees"].count(),
-            "dim_department_snapshots": sources["Departments"].count(),
-            "dim_grade_snapshots": sources["Grades"].count(),
-            "dim_student_snapshots": sources["Students"].count(),
-            "dim_term_snapshots": sources["Terms"].count(),
-        }
-        for table, expected_rows in expected_dimension_rows.items():
-            if dimension_rows[table] != expected_rows:
-                raise RuntimeError(
-                    f"{table} produced {dimension_rows[table]} rows from "
-                    f"{expected_rows} source rows; refusing to publish."
-                )
-
-        for table, frame in dimensions.items():
-            LOGGER.info("Writing %s rows to %s", dimension_rows[table], table)
-            _write_clickhouse(_with_snapshot_id(frame, snapshot_id), table)
-
-        for table, frame in facts.items():
-            LOGGER.info("Writing %s rows to %s", fact_rows[table], table)
-            _write_clickhouse(_with_snapshot_id(frame, snapshot_id), table)
+        for table, frame in frames.items():
+            LOGGER.info("Writing %s rows to %s", expected[table][0], table)
+            if expected[table][0]:
+                _write_clickhouse(_with_snapshot_id(frame, snapshot_id), table)
+            _validate_stored_snapshot(client, snapshot_id, table, expected[table])
 
         load_columns = [
             "snapshot_id",
             "source_run_id",
-            "completed_at",
+            "snapshot_started_at",
             *DIMENSION_TABLES.values(),
             *FACT_TABLES.values(),
         ]
@@ -749,15 +720,14 @@ def run(spark: SparkSession) -> None:
             (
                 snapshot_id,
                 source_run_id,
-                datetime.now(timezone.utc),
-                *[dimension_rows[table] for table in DIMENSION_TABLES],
-                *[fact_rows[table] for table in FACT_TABLES],
+                snapshot_started_at,
+                *[expected[table][0] for table in DIMENSION_TABLES],
+                *[expected[table][0] for table in FACT_TABLES],
             )
         ]
-        load_record = spark.createDataFrame(load_values, load_columns)
-        _write_clickhouse(load_record, "warehouse_model_loads")
+        client.insert("warehouse_model_loads", load_values, column_names=load_columns)
     finally:
-        for frame in cached_frames:
+        for frame in frames.values():
             frame.unpersist()
 
     LOGGER.info(
@@ -768,18 +738,32 @@ def run(spark: SparkSession) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source-run-id", required=True, type=int)
+    args = parser.parse_args()
+    if not 0 < args.source_run_id < 2**63:
+        parser.error("--source-run-id must be a positive PostgreSQL bigint.")
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     spark = (
         SparkSession.builder.appName("students-staging-to-clickhouse")
-        .config("spark.sql.shuffle.partitions", str(READ_PARTITIONS))
         .config("spark.sql.session.timeZone", "UTC")
         .getOrCreate()
     )
     try:
-        run(spark)
+        client = clickhouse_connect.get_client(
+            host=os.environ["WAREHOUSE_HOST"],
+            port=int(os.environ["WAREHOUSE_HTTP_PORT"]),
+            database=os.environ["WAREHOUSE_DB_NAME"],
+            username=WAREHOUSE_DB_USER,
+            password=WAREHOUSE_DB_PASSWORD,
+        )
+        try:
+            run(spark, client, args.source_run_id)
+        finally:
+            client.close()
     finally:
         spark.stop()
 

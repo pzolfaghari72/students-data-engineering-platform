@@ -1,182 +1,127 @@
 import json
+import tempfile
 import unittest
-from datetime import UTC, datetime
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 
-from students_staging.cdc_loader import (
-    advance_consumed_offsets,
-    normalize_debezium_record,
-    persisted_operation_counts,
-    scd2_transition,
-    snapshot_boundary_consumed,
-    source_version_order,
-)
+from cdc_events import advance_offsets, completed_source_offset, normalize_debezium_record, source_version_order
+from stream_cdc import ClickHouseCDC, checked_checkpoint, event_row
+
+TOPIC = "students.Students.dbo.Students"
+LSN = "00000027:000001d0:0003"
+
+
+def normalized(operation="r", offset=0, key=None, **extra):
+    source = {"db": "Students", "schema": "dbo", "table": "Students", "snapshot": "last",
+              "commit_lsn": LSN, "change_lsn": LSN, "event_serial_no": 1}
+    envelope = {"op": operation, "source": source, "after": {"StudentId": 17, "Status": "A"}}
+    envelope.update(extra)
+    return normalize_debezium_record(
+        topic=TOPIC, partition=0, offset=offset, key=key or b'{"StudentId":17}',
+        value=None if operation == "t" else json.dumps(envelope).encode(),
+        topic_prefix="students", expected_schema="dbo", expected_database="Students",
+    )
 
 
 class DebeziumRecordTests(unittest.TestCase):
-    def test_normalizes_initial_snapshot_record(self) -> None:
-        event = normalize_debezium_record(
-            topic="students.Students.dbo.Students",
-            partition=0,
-            offset=12,
-            key=b'{"StudentId":17}',
-            value=json.dumps(
-                {
-                    "before": None,
-                    "after": {"StudentId": 17, "FirstName": "Ada"},
-                    "source": {
-                        "schema": "dbo",
-                        "table": "Students",
-                        "commit_lsn": "00000027:000001d0:0003",
-                        "change_lsn": "00000027:000001d0:0004",
-                        "event_serial_no": 1,
-                        "snapshot": "last",
-                    },
-                    "op": "r",
-                    "ts_ms": "1700000000000",
-                }
-            ).encode(),
-            topic_prefix="students",
-            expected_schema="dbo",
-            expected_database="Students",
-        )
+    def test_snapshot_and_live_position_order(self):
+        snapshot, insert = normalized(), normalized("c")
+        self.assertEqual(snapshot["source_snapshot_state"], "last")
+        self.assertLess(source_version_order(snapshot), source_version_order(insert))
+        self.assertLess(source_version_order(insert),
+                        source_version_order({**insert, "source_event_serial_no": "2"}))
 
-        self.assertEqual(event["source_table"], "Students")
-        self.assertEqual(event["operation"], "r")
-        self.assertEqual(event["source_key"], {"StudentId": 17})
-        self.assertEqual(event["source_lsn"], "00000027:000001d0:0003")
-        self.assertEqual(
-            event["source_commit_lsn"], "00000027:000001d0:0003"
-        )
-        self.assertEqual(
-            event["source_change_lsn"], "00000027:000001d0:0004"
-        )
-        self.assertEqual(event["source_event_serial_no"], "1")
-        self.assertEqual(event["source_snapshot_state"], "last")
-        self.assertLess(
-            source_version_order(event),
-            source_version_order(
-                {
-                    **event,
-                    "source_change_lsn": "00000027:000001d0:0005",
-                }
-            ),
-        )
-        self.assertEqual(
-            event["source_timestamp"],
-            datetime.fromtimestamp(1_700_000_000, tz=UTC),
-        )
+    def test_delete_and_tombstone_are_separate_records(self):
+        delete = normalized("d", after=None, before={"StudentId": 17})
+        self.assertEqual(delete["operation"], "d")
+        self.assertEqual(delete["before_image"]["StudentId"], 17)
+        self.assertEqual(normalized("t")["operation"], "t")
+        self.assertEqual(event_row("g", 2, normalized("t")), event_row("g", 2, normalized("t")))
 
-    def test_rejects_unexpected_topic_schema(self) -> None:
-        with self.assertRaisesRegex(ValueError, "Unexpected source schema"):
-            normalize_debezium_record(
-                topic="students.Students.other.Students",
-                partition=0,
-                offset=0,
-                key={"StudentId": 17},
-                value={"op": "r", "after": {"StudentId": 17}},
-                topic_prefix="students",
-                expected_schema="dbo",
-                expected_database="Students",
-            )
+    def test_rejects_unknown_database_in_payload(self):
+        with self.assertRaisesRegex(ValueError, "Unexpected source database"):
+            normalized(source={"db": "another_db"})
 
-    def test_rejects_snapshot_without_after_image(self) -> None:
+    def test_rejects_missing_image_or_live_change_position(self):
         with self.assertRaisesRegex(ValueError, "no after image"):
-            normalize_debezium_record(
-                topic="students.Students.dbo.Students",
-                partition=0,
-                offset=0,
-                key={"StudentId": 17},
-                value={"op": "r", "after": None},
-                topic_prefix="students",
-                expected_schema="dbo",
-                expected_database="Students",
-            )
+            normalized("u", after=None)
+        with self.assertRaisesRegex(ValueError, "change position"):
+            normalized("u", source={"commit_lsn": LSN})
+
+    def test_compatible_new_field_is_preserved(self):
+        value = normalized("u", after={"StudentId": 17, "AddedColumn": "example"})
+        self.assertEqual(value["after_image"]["AddedColumn"], "example")
+
+    def test_key_serialization_is_canonical(self):
+        a = event_row("g", 1, normalized(key='{"A":1,"Z":2}'))
+        b = event_row("g", 1, normalized(key='{"Z":2,"A":1}'))
+        self.assertEqual(a, b)
 
 
-class Scd2TransitionTests(unittest.TestCase):
-    def test_new_and_changed_rows_create_versions(self) -> None:
-        current = {"attributes": {"StudentId": 17}, "is_deleted": False}
-        changed, attributes, is_deleted = scd2_transition(
-            current,
-            {"operation": "u", "after_image": {"StudentId": 17, "City": "Paris"}},
-        )
+class BootstrapTests(unittest.TestCase):
+    def test_durable_completion_and_late_start(self):
+        self.assertEqual(completed_source_offset(
+            {"snapshot": True, "snapshot_completed": True, "commit_lsn": LSN}
+        ), (True, LSN))
+        self.assertEqual(completed_source_offset({"commit_lsn": LSN, "change_lsn": LSN}), (True, ""))
+        self.assertEqual(completed_source_offset(
+            {"snapshot": True, "snapshot_completed": False, "commit_lsn": LSN}
+        ), (False, ""))
+        self.assertEqual(completed_source_offset({"commit_lsn": LSN}), (False, ""))
 
-        self.assertTrue(changed)
-        self.assertEqual(attributes, {"StudentId": 17, "City": "Paris"})
-        self.assertFalse(is_deleted)
-
-    def test_unchanged_rows_and_tombstones_do_not_create_versions(self) -> None:
-        current = {"attributes": {"StudentId": 17}, "is_deleted": False}
-
-        self.assertEqual(
-            scd2_transition(
-                current,
-                {"operation": "u", "after_image": {"StudentId": 17}},
-            ),
-            (False, None, False),
-        )
-        self.assertEqual(
-            scd2_transition(
-                current,
-                {"operation": "t", "before_image": None, "after_image": None},
-            ),
-            (False, None, False),
-        )
-
-    def test_delete_creates_a_deleted_version(self) -> None:
-        current = {"attributes": {"StudentId": 17}, "is_deleted": False}
-
-        self.assertEqual(
-            scd2_transition(
-                current,
-                {"operation": "d", "before_image": {"StudentId": 17}},
-            ),
-            (True, {"StudentId": 17}, True),
-        )
+    def test_partitions_advance_without_order_or_input_mutation(self):
+        begin = {f"{TOPIC}:0": 0, f"{TOPIC}:1": 3}
+        self.assertEqual(advance_offsets(begin, [(TOPIC, 0, 1), (TOPIC, 1, 3), (TOPIC, 0, 0)]),
+                         {f"{TOPIC}:0": 2, f"{TOPIC}:1": 4})
+        self.assertEqual(begin[f"{TOPIC}:0"], 0)
+        with self.assertRaisesRegex(RuntimeError, "Unexpected Kafka position"):
+            advance_offsets(begin, [(TOPIC, 0, 2)])
 
 
-class SnapshotBoundaryTests(unittest.TestCase):
-    def test_requires_capture_and_consumption_through_each_partition_end(self) -> None:
-        ends = {"students.Students.dbo.Students:0": 15, "students.Students.dbo.Courses:0": 9}
-        consumed = {"students.Students.dbo.Students:0": 15}
+class SinkReplayTests(unittest.TestCase):
+    def setUp(self):
+        self.client = Mock()
+        self.store = ClickHouseCDC(self.client, "g")
+        self.row = event_row("g", 0, normalized())
+        self.before = {f"{TOPIC}:0": 0}
+        self.after = {f"{TOPIC}:0": 1}
+        self.receipt = (TOPIC, 0, 0, self.row[-1])
 
-        self.assertFalse(snapshot_boundary_consumed(ends, consumed, False))
-        self.assertFalse(snapshot_boundary_consumed(ends, consumed, True))
-        consumed["students.Students.dbo.Courses:0"] = 9
-        self.assertTrue(snapshot_boundary_consumed(ends, consumed, True))
+    def response(self, *rows):
+        return SimpleNamespace(result_rows=list(rows))
 
-    def test_offsets_advance_monotonically_across_replayed_records(self) -> None:
-        initial = {"students.Students.dbo.Students:0": 20}
-        updated = advance_consumed_offsets(
-            initial,
-            [
-                {"kafka_topic": "students.Students.dbo.Students", "kafka_partition": 0, "kafka_offset": 18},
-                {"kafka_topic": "students.Students.dbo.Students", "kafka_partition": 0, "kafka_offset": 21},
-            ],
-        )
+    def test_seals_only_after_verified_insert(self):
+        self.client.query.side_effect = [self.response(), self.response(self.receipt)]
+        self.assertEqual(self.store.seal("q", 0, [self.row], self.before, self.after), self.after)
+        self.assertEqual([call.args[0] for call in self.client.insert.call_args_list],
+                         ["cdc_events", "cdc_batch_commits"])
 
-        self.assertEqual(initial["students.Students.dbo.Students:0"], 20)
-        self.assertEqual(updated["students.Students.dbo.Students:0"], 22)
-        self.assertTrue(snapshot_boundary_consumed({}, {}, True))
+    def test_missing_sink_row_cannot_advance_progress(self):
+        self.client.query.side_effect = [self.response(), self.response()]
+        with self.assertRaisesRegex(RuntimeError, "failed verification"):
+            self.store.seal("q", 0, [self.row], self.before, self.after)
+        self.client.insert.assert_called_once()
+        self.assertEqual(self.client.insert.call_args.args[0], "cdc_events")
 
-
-class PersistedOperationCountTests(unittest.TestCase):
-    def test_replayed_events_are_not_counted_as_new_operations(self) -> None:
-        events = [
-            ("c", True),
-            ("r", True),
-            ("u", False),
-            ("d", True),
-            ("t", True),
+    def test_existing_commit_is_verified_and_not_reinserted(self):
+        from cdc_events import fingerprint
+        digest = fingerprint([((TOPIC, 0, 0), self.row[-1])])
+        self.client.query.side_effect = [
+            self.response(("q", digest, self.after)),
+            self.response(self.receipt),
         ]
-        deltas = [
-            persisted_operation_counts(operation, inserted)
-            for operation, inserted in events
-        ]
-        counts = tuple(sum(delta[index] for delta in deltas) for index in range(3))
+        self.assertEqual(self.store.seal("q", 0, [self.row], self.before, self.after), self.after)
+        self.client.insert.assert_not_called()
 
-        self.assertEqual(counts, (2, 0, 1))
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_checkpoint_allows_pending_sink_commit_but_refuses_another_query(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch)
+            (path / "metadata").write_text('{"id":"q"}')
+            (path / "commits").mkdir()
+            (path / "commits" / "0").touch()
+            checked_checkpoint(path, "q", 1)
+            with self.assertRaisesRegex(RuntimeError, "different Spark checkpoint"):
+                checked_checkpoint(path, "another", 1)
+            with self.assertRaisesRegex(RuntimeError, "disagree"):
+                checked_checkpoint(path, "", -1)

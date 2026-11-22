@@ -1,701 +1,364 @@
-"""Consume Debezium Kafka topics and persist CDC events to PostgreSQL/ClickHouse."""
+"""Load validated Debezium microbatches into the dedicated ClickHouse CDC database."""
 
 from __future__ import annotations
 
-import time
+import fcntl
 import json
 import logging
 import os
-import re
-import uuid
+import time
+from contextlib import closing
 from pathlib import Path
-from typing import Any
 from urllib.error import URLError
 from urllib.parse import quote
 from urllib.request import ProxyHandler, build_opener
 
-import psycopg2
-from psycopg2.extras import Json
-from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql.types import (
-    IntegerType,
-    LongType,
-    StringType,
-    StructField,
-    StructType,
-    TimestampType,
-)
-
-from students_staging.cdc_loader import (
-    _apply_scd2,
-    _decode_json,
-    advance_consumed_offsets,
+from cdc_events import (
+    advance_offsets,
+    completed_source_offset,
+    fingerprint,
+    json_text,
     normalize_debezium_record,
-    persisted_operation_counts,
-    snapshot_boundary_consumed,
     source_version_order,
 )
-from students_staging.source_tables import SCD2_TABLES, SOURCE_TABLES
+from students_staging.source_tables import SOURCE_TABLES
 
-LOGGER = logging.getLogger("students_cdc_stream")
-EXPECTED_TABLES = [source_table for source_table, _ in SOURCE_TABLES]
-EVENT_SCHEMA = StructType(
-    [
-        StructField("generation_id", StringType(), False),
-        StructField("event_id", StringType(), False),
-        StructField("source_schema", StringType(), False),
-        StructField("source_table", StringType(), False),
-        StructField("operation", StringType(), False),
-        StructField("source_key", StringType(), False),
-        StructField("before_image", StringType(), False),
-        StructField("after_image", StringType(), False),
-        StructField("source_lsn", StringType(), False),
-        StructField("source_commit_lsn", StringType(), False),
-        StructField("source_change_lsn", StringType(), False),
-        StructField("source_event_serial_no", StringType(), False),
-        StructField("source_snapshot_state", StringType(), False),
-        StructField("source_version", StringType(), False),
-        StructField("source_timestamp", TimestampType(), False),
-        StructField("kafka_topic", StringType(), False),
-        StructField("kafka_partition", IntegerType(), False),
-        StructField("kafka_offset", LongType(), False),
-    ]
-)
+LOGGER = logging.getLogger("students_cdc")
+EVENT_COLUMNS = [
+    "generation_id", "batch_id", "kafka_topic", "kafka_partition", "kafka_offset",
+    "source_table", "source_key", "operation", "before_image", "after_image",
+    "commit_lsn", "source_version", "snapshot_state", "source_time_ms", "record_hash",
+]
 
 
-def _required_env(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Required environment variable {name} is not set.")
-    return value
-
-
-def _staging_connection() -> psycopg2.extensions.connection:
-    return psycopg2.connect(
-        host=_required_env("STAGING_DB_HOST"),
-        port=int(_required_env("STAGING_DB_PORT")),
-        dbname=_required_env("STAGING_DB_NAME"),
-        user=_required_env("STAGING_DB_USER"),
-        password=_required_env("STAGING_DB_PASSWORD"),
-    )
-
-
-def _warehouse_url() -> str:
-    return (
-        f"jdbc:clickhouse:http://{_required_env('WAREHOUSE_HOST')}:"
-        f"{_required_env('WAREHOUSE_HTTP_PORT')}/"
-        f"{_required_env('WAREHOUSE_DB_NAME')}"
-    )
-
-
-def _topic_pattern() -> str:
-    table_pattern = "|".join(
-        re.escape(table) for table in sorted(EXPECTED_TABLES)
-    )
-    return (
-        f"^{re.escape(_required_env('DEBEZIUM_TOPIC_PREFIX'))}\\."
-        f"{re.escape(_required_env('SOURCE_DB_NAME'))}\\."
-        f"{re.escape(_required_env('SOURCE_DB_SCHEMA'))}\\.({table_pattern})$"
-    )
-
-
-def _has_checkpoint(checkpoint_dir: str) -> bool:
-    offsets_dir = Path(checkpoint_dir) / "offsets"
-    return offsets_dir.is_dir() and any(offsets_dir.iterdir())
-
-
-def _validate_kafka_start(checkpoint_dir: str) -> None:
-    from kafka import KafkaConsumer, TopicPartition
-
-    bootstrap_servers = _required_env("KAFKA_BOOTSTRAP_SERVERS")
-    topic_pattern = re.compile(_topic_pattern())
-    consumer = KafkaConsumer(
-        bootstrap_servers=bootstrap_servers,
-        enable_auto_commit=False,
-        request_timeout_ms=30_000,
-    )
+def kafka_identity(spark, bootstrap, topics):
+    """Use the same Kafka client as Spark, including the broker-assigned topic IDs."""
+    jvm = spark.sparkContext._jvm
+    properties = jvm.java.util.Properties()
+    properties.setProperty("bootstrap.servers", bootstrap)
+    names = jvm.java.util.ArrayList()
+    for topic in topics:
+        names.add(topic)
+    admin = jvm.org.apache.kafka.clients.admin.AdminClient.create(properties)
     try:
-        topics = {
-            topic for topic in consumer.topics() if topic_pattern.fullmatch(topic)
-        }
-        partitions = [
-            TopicPartition(topic, partition)
-            for topic in sorted(topics)
-            for partition in sorted(consumer.partitions_for_topic(topic) or ())
-        ]
-        if not partitions:
-            raise RuntimeError("Debezium topics have no Kafka partitions.")
-        beginnings = consumer.beginning_offsets(partitions)
-        if not _has_checkpoint(checkpoint_dir):
-            retained = [
-                f"{partition.topic}[{partition.partition}]={offset}"
-                for partition, offset in beginnings.items()
-                if offset > 0
+        unit = jvm.java.util.concurrent.TimeUnit.SECONDS
+        cluster = admin.describeCluster().clusterId().get(30, unit)
+        descriptions = admin.describeTopics(names).allTopicNames().get(30, unit)
+        identity = {}
+        for topic in topics:
+            description = descriptions.get(topic)
+            topic_id = description.topicId().toString()
+            if topic_id == "AAAAAAAAAAAAAAAAAAAAAA" or description.partitions().isEmpty():
+                raise RuntimeError(f"Kafka has no durable identity/partitions for {topic}.")
+            identity[topic] = [
+                topic_id, sorted(part.partition() for part in description.partitions())
             ]
-            if retained:
-                raise RuntimeError(
-                    "A new Spark checkpoint cannot start because Kafka retention "
-                    "has already removed records: " + ", ".join(retained)
-                )
+        return [cluster, identity]
     finally:
-        consumer.close()
+        admin.close()
 
 
-def _snapshot_completed() -> bool:
-    """Confirm snapshot completion from committed Kafka Connect offsets."""
-    connector = quote(_required_env("DEBEZIUM_CONNECTOR_NAME"), safe="")
-    base_url = _required_env("CONNECT_REST_URL").rstrip("/")
-    endpoint = f"{base_url}/connectors/{connector}/offsets"
-    expected_server = _required_env("DEBEZIUM_TOPIC_PREFIX")
-    expected_database = _required_env("SOURCE_DB_NAME")
-
-    try:
-        opener = build_opener(ProxyHandler({}))
-        with opener.open(endpoint, timeout=5) as response:
-            payload = json.load(response)
-    except (URLError, TimeoutError) as error:
-        LOGGER.warning("Cannot read Debezium's saved offsets: %s", error)
-        return False
-
-    if (
-        not isinstance(payload, dict)
-        or not isinstance(payload.get("offsets"), list)
-    ):
-        raise RuntimeError(
-            "Kafka Connect returned an invalid offsets response."
-        )
-
-    matches = [
-        item.get("offset")
-        for item in payload["offsets"]
-        if isinstance(item, dict)
-        and isinstance(item.get("partition"), dict)
-        and item["partition"].get("server") == expected_server
-        and item["partition"].get("database") == expected_database
-    ]
-
-    if not matches or matches == [None]:
-        return False
-
-    if len(matches) != 1 or not isinstance(matches[0], dict):
-        raise RuntimeError(
-            "Expected one saved offset for the configured source."
-        )
-
-    offset = matches[0]
-
-    if not offset:
-        return False
-
-    if "snapshot" not in offset or "snapshot_completed" not in offset:
-        raise RuntimeError(
-            "Saved source offsets no longer contain explicit snapshot "
-            "completion evidence, and this generation has no saved "
-            "boundary. Verify the retained initial snapshot before "
-            "bootstrapping."
-        )
-
-    if (
-        type(offset["snapshot"]) is not bool
-        or type(offset["snapshot_completed"]) is not bool
-    ):
-        raise RuntimeError(
-            "Kafka Connect snapshot flags must be JSON booleans."
-        )
-
-    return (
-        offset["snapshot"] is True
-        and offset["snapshot_completed"] is True
+def kafka_bounds(consumer, partitions):
+    beginnings = consumer.beginning_offsets(partitions)
+    endings = consumer.end_offsets(partitions)
+    return tuple(
+        {f"{p.topic}:{p.partition}": offsets[p] for p in partitions}
+        for offsets in (beginnings, endings)
     )
 
 
-def _ensure_snapshot_boundary(
-    query_name: str,
-    generation_id: str,
-    connector_name: str,
-    timeout_seconds: int = 3600,
-) -> None:
-    """Save a confirmed Kafka boundary before starting the streaming query."""
-    connection = _staging_connection()
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT snapshot_boundary_captured
-                FROM metadata.streaming_generations
-                WHERE query_name = %s AND generation_id = %s
-                """,
-                (query_name, generation_id),
-            )
-            row = cursor.fetchone()
-    finally:
-        connection.close()
-
-    if row is None:
-        raise RuntimeError(
-            "The streaming generation metadata disappeared."
-        )
-
-    if row[0]:
-        LOGGER.info("Reusing the saved snapshot boundary.")
-        return
-
-    LOGGER.info(
-        "Waiting for Debezium to persist full-snapshot completion."
-    )
-    deadline = time.monotonic() + timeout_seconds
-
-    while not _snapshot_completed():
-        if time.monotonic() >= deadline:
-            raise RuntimeError(
-                "Timed out waiting for confirmed snapshot completion."
-            )
-        time.sleep(5)
-
-    end_offsets = _snapshot_end_offsets()
-
-    if not end_offsets:
-        raise RuntimeError(
-            "No Debezium table partitions are available for bootstrap."
-        )
-
-    _persist_postgres_batch(
-        [],
-        query_name=query_name,
-        generation_id=generation_id,
-        connector_name=connector_name,
-        snapshot_end_offsets=end_offsets,
-    )
-
-    LOGGER.info(
-        "Saved snapshot boundary for %s Kafka partitions.",
-        len(end_offsets),
-    )
-
-
-def _snapshot_end_offsets() -> dict[str, int]:
-    from kafka import KafkaConsumer, TopicPartition
-
-    consumer = KafkaConsumer(
-        bootstrap_servers=_required_env("KAFKA_BOOTSTRAP_SERVERS"),
-        enable_auto_commit=False,
-        request_timeout_ms=30_000,
-    )
-    try:
-        topic_pattern = re.compile(_topic_pattern())
-        topics = {
-            topic for topic in consumer.topics() if topic_pattern.fullmatch(topic)
-        }
-        partitions = [
-            TopicPartition(topic, partition)
-            for topic in sorted(topics)
-            for partition in sorted(consumer.partitions_for_topic(topic) or ())
-        ]
-        if not partitions:
-            return {}
-        return {
-            f"{partition.topic}:{partition.partition}": int(offset)
-            for partition, offset in consumer.end_offsets(partitions).items()
-        }
-    finally:
-        consumer.close()
-
-
-def _get_or_create_generation(query_name: str, connector_name: str) -> str:
-    connection = _staging_connection()
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT generation_id
-                FROM metadata.streaming_generations
-                WHERE query_name = %s
-                """,
-                (query_name,),
-            )
-            row = cursor.fetchone()
-            if row:
-                generation_id = str(row[0])
-            else:
-                generation_id = str(uuid.uuid4())
-                cursor.execute(
-                    """
-                    INSERT INTO metadata.streaming_generations
-                        (query_name, generation_id, connector_name,
-                         expected_tables, completed_snapshot_tables, status)
-                    VALUES (%s, %s, %s, %s, '[]'::jsonb, 'BOOTSTRAPPING')
-                    """,
-                    (
-                        query_name,
-                        generation_id,
-                        connector_name,
-                        Json(EXPECTED_TABLES),
-                    ),
-                )
-        connection.commit()
-        return generation_id
-    finally:
-        connection.close()
-
-
-def _json_text(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str) if value is not None else ""
-
-
-def _clickhouse_row(generation_id: str, event: dict[str, Any]) -> tuple[Any, ...]:
-    return (
-        generation_id,
-        f"{event['kafka_topic']}:{event['kafka_partition']}:{event['kafka_offset']}",
-        event["source_schema"],
-        event["source_table"],
-        event["operation"],
-        _json_text(event["source_key"]),
-        _json_text(event["before_image"]),
-        _json_text(event["after_image"]),
-        event["source_lsn"] or "",
-        event["source_commit_lsn"] or "",
-        event["source_change_lsn"] or "",
-        event["source_event_serial_no"] or "",
-        event["source_snapshot_state"] or "",
-        source_version_order(event),
-        event["source_timestamp"],
-        event["kafka_topic"],
-        event["kafka_partition"],
-        event["kafka_offset"],
-    )
-
-
-def _persist_postgres_batch(
-    events: list[dict[str, Any]],
-    *,
-    query_name: str,
-    generation_id: str,
-    connector_name: str,
-    snapshot_end_offsets: dict[str, int] | None,
-) -> bool:
-    """Persist a microbatch and report when its generation needs publishing."""
-    connection = _staging_connection()
-    try:
-        with connection.cursor() as cursor:
-            if events:
-                cursor.execute(
-                    """
-                    INSERT INTO metadata.pipeline_runs
-                        (pipeline_name, run_type, status, execution_context)
-                    VALUES ('spark_cdc_stream_to_warehouse', 'INCREMENTAL',
-                            'RUNNING', %s)
-                    RETURNING run_id
-                    """,
-                    (
-                        Json(
-                            {
-                                "streaming_query": query_name,
-                                "generation_id": generation_id,
-                            }
-                        ),
-                    ),
-                )
-                run_id = cursor.fetchone()[0]
-                cursor.execute(
-                    """
-                    INSERT INTO metadata.extraction_batches
-                        (run_id, source_schema, source_table, capture_instance,
-                         extraction_type, status)
-                    VALUES (%s, %s, 'CDC_STREAM', %s, 'CDC', 'RUNNING')
-                    RETURNING batch_id
-                    """,
-                    (
-                        run_id,
-                        _required_env("SOURCE_DB_SCHEMA"),
-                        connector_name,
-                    ),
-                )
-                batch_id = cursor.fetchone()[0]
-
-                inserted = updated = deleted = 0
-                for event in events:
-                    cursor.execute(
-                        """
-                        INSERT INTO history.cdc_events
-                            (source_schema, source_table, connector_name, source_lsn,
-                             source_commit_lsn, source_change_lsn,
-                             source_event_serial_no, source_snapshot_state,
-                             operation, source_key, before_image, after_image,
-                             source_timestamp, kafka_topic, kafka_partition,
-                             kafka_offset, batch_id)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                                %s, %s, %s, %s, %s)
-                        ON CONFLICT (kafka_topic, kafka_partition, kafka_offset)
-                        DO NOTHING
-                        RETURNING event_id
-                        """,
-                        (
-                            event["source_schema"],
-                            event["source_table"],
-                            connector_name,
-                            event["source_lsn"],
-                            event["source_commit_lsn"],
-                            event["source_change_lsn"],
-                            event["source_event_serial_no"],
-                            event["source_snapshot_state"],
-                            event["operation"],
-                            Json(event["source_key"]),
-                            Json(event["before_image"])
-                            if event["before_image"] is not None
-                            else None,
-                            Json(event["after_image"])
-                            if event["after_image"] is not None
-                            else None,
-                            event["source_timestamp"],
-                            event["kafka_topic"],
-                            event["kafka_partition"],
-                            event["kafka_offset"],
-                            batch_id,
-                        ),
-                    )
-                    was_inserted = cursor.fetchone() is not None
-                    if was_inserted and event["source_table"] in SCD2_TABLES:
-                        _apply_scd2(cursor, event, Json)                    
-                    insert_delta, update_delta, delete_delta = (
-                        persisted_operation_counts(
-                            event["operation"],
-                            inserted=was_inserted,
-                        )
-                    )
-                    inserted += insert_delta
-                    updated += update_delta
-                    deleted += delete_delta
-
-                cursor.execute(
-                    """
-                    UPDATE metadata.extraction_batches
-                    SET status = 'SUCCESS', completed_at = CURRENT_TIMESTAMP,
-                        extracted_rows = %s, inserted_rows = %s,
-                        updated_rows = %s, deleted_rows = %s
-                    WHERE batch_id = %s
-                    """,
-                    (len(events), inserted, updated, deleted, batch_id),
-                )
-                cursor.execute(
-                    """
-                    UPDATE metadata.pipeline_runs
-                    SET status = 'SUCCESS', completed_at = CURRENT_TIMESTAMP
-                    WHERE run_id = %s
-                    """,
-                    (run_id,),
-                )
-
-            cursor.execute(
-                """
-                SELECT snapshot_end_offsets, consumed_offsets,
-                       snapshot_boundary_captured, snapshot_events_complete, status
-                FROM metadata.streaming_generations
-                WHERE query_name = %s AND generation_id = %s
-                FOR UPDATE
-                """,
-                (query_name, generation_id),
-            )
-            row = cursor.fetchone()
-            if row is None:
-                raise RuntimeError("The streaming generation metadata disappeared.")
-            known_end_offsets = row[0] or {}
-            consumed_offsets = row[1] or {}
-            boundary_captured = bool(row[2])
-            if snapshot_end_offsets is not None and not boundary_captured:
-                known_end_offsets = snapshot_end_offsets
-                boundary_captured = True
-            consumed_offsets = advance_consumed_offsets(consumed_offsets, events)
-            snapshot_complete = bool(row[3]) or snapshot_boundary_consumed(
-                known_end_offsets,
-                consumed_offsets,
-                boundary_captured,
-            )
-            cursor.execute(
-                """
-                UPDATE metadata.streaming_generations
-                SET snapshot_end_offsets = %s,
-                    consumed_offsets = %s,
-                    snapshot_boundary_captured = %s,
-                    snapshot_events_complete = %s,
-                    last_event_at = CASE WHEN %s THEN CURRENT_TIMESTAMP
-                                         ELSE last_event_at END,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE query_name = %s AND generation_id = %s
-                """,
-                (
-                    Json(known_end_offsets),
-                    Json(consumed_offsets),
-                    boundary_captured,
-                    snapshot_complete,
-                    bool(events),
-                    query_name,
-                    generation_id,
-                ),
-            )
-            cursor.execute(
-                """
-                SELECT snapshot_events_complete, status
-                FROM metadata.streaming_generations
-                WHERE query_name = %s AND generation_id = %s
-                """,
-                (query_name, generation_id),
-            )
-            snapshot_complete, status = cursor.fetchone()
-            publish_ready = bool(snapshot_complete) and status != "ACTIVE"
-        connection.commit()
-        return publish_ready
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-
-
-def _write_clickhouse_batch(
-    spark: SparkSession,
-    rows: list[tuple[Any, ...]],
-) -> None:
-    if not rows:
-        return
-    frame: DataFrame = spark.createDataFrame(rows, schema=EVENT_SCHEMA)
-    (
-        frame.write.format("jdbc")
-        .option("url", _warehouse_url())
-        .option("dbtable", "cdc_events")
-        .option("user", _required_env("WAREHOUSE_DB_USER"))
-        .option("password", _required_env("WAREHOUSE_DB_PASSWORD"))
-        .option("driver", _required_env("WAREHOUSE_JDBC_DRIVER"))
-        .option("batchsize", _required_env("WAREHOUSE_WRITE_BATCH_SIZE"))
-        .mode("append")
-        .save()
-    )
-
-
-def _publish_generation(generation_id: str, query_name: str) -> None:
-    import clickhouse_connect
-
-    client = clickhouse_connect.get_client(
-        host=_required_env("WAREHOUSE_HOST"),
-        port=int(_required_env("WAREHOUSE_HTTP_PORT")),
-        username=_required_env("WAREHOUSE_DB_USER"),
-        password=_required_env("WAREHOUSE_DB_PASSWORD"),
-        database=_required_env("WAREHOUSE_DB_NAME"),
-    )
-    try:
-        client.insert(
-            "warehouse_stream_generations",
-            [[query_name, generation_id, "PUBLISHED"]],
-            column_names=["query_name", "generation_id", "status"],
-        )
-    finally:
-        client.close()
-
-
-def run() -> None:
-    app_name = _required_env("STREAMING_APP_NAME")
-    query_name = _required_env("STREAMING_QUERY_NAME")
-    checkpoint_dir = _required_env("STREAMING_CHECKPOINT_DIR")
-    connector_name = _required_env("DEBEZIUM_CONNECTOR_NAME")
-    max_offsets = int(_required_env("STREAMING_MAX_OFFSETS_PER_TRIGGER"))
-    if max_offsets <= 0:
-        raise ValueError("STREAMING_MAX_OFFSETS_PER_TRIGGER must be positive.")
-    Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
-
-    generation_id = _get_or_create_generation(query_name, connector_name)
-
-    _ensure_snapshot_boundary(
-        query_name,
-        generation_id,
-        connector_name,
-    )
-
-    _validate_kafka_start(checkpoint_dir)
-    
-    topic_pattern = _topic_pattern()
-    spark = (
-        SparkSession.builder.appName(app_name)
-        .config("spark.sql.shuffle.partitions", "2")
-        .config("spark.sql.streaming.noDataMicroBatches.enabled", "true")
-        .getOrCreate()
-    )
-    spark.sparkContext.setLogLevel("WARN")
-    source = (
-        spark.readStream.format("kafka")
-        .option("kafka.bootstrap.servers", _required_env("KAFKA_BOOTSTRAP_SERVERS"))
-        .option("kafka.group.id", _required_env("STREAMING_KAFKA_GROUP_ID"))
-        .option("subscribePattern", topic_pattern)
-        .option("startingOffsets", "earliest")
-        .option("failOnDataLoss", "true")
-        .option("maxOffsetsPerTrigger", str(max_offsets))
-        .load()
-    )
-
-    def process_batch(frame: DataFrame, batch_id: int) -> None:
+def wait_for_snapshot(rest_url, connector, prefix, database, timeout):
+    endpoint = f"{rest_url.rstrip('/')}/connectors/{quote(connector, safe='')}/offsets"
+    opener = build_opener(ProxyHandler({}))
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         try:
-            events: list[dict[str, Any]] = []
-            for row in frame.select(
-                "topic", "partition", "offset", "key", "value"
-            ).toLocalIterator():
-                event = normalize_debezium_record(
-                    topic=row.topic,
-                    partition=row.partition,
-                    offset=row.offset,
-                    key=_decode_json(row.key),
-                    value=_decode_json(row.value),
-                    topic_prefix=_required_env("DEBEZIUM_TOPIC_PREFIX"),
-                    expected_schema=_required_env("SOURCE_DB_SCHEMA"),
-                    expected_database=_required_env("SOURCE_DB_NAME"),
-                )
-                event["source_version"] = source_version_order(event)
-                events.append(event)
+            with opener.open(endpoint, timeout=5) as response:
+                payload = json.load(response)
+        except (URLError, TimeoutError):
+            time.sleep(5)
+            continue
+        matches = [
+            item.get("offset") for item in payload["offsets"]
+            if item["partition"] == {"server": prefix, "database": database}
+        ]
+        if len(matches) > 1:
+            raise RuntimeError("More than one Connect offset matches the source.")
+        if matches and matches[0]:
+            complete, baseline = completed_source_offset(matches[0])
+            if complete:
+                return baseline
+        time.sleep(5)
+    raise RuntimeError("Debezium did not supply a completed snapshot or live source offset.")
 
-            publish_ready = _persist_postgres_batch(
-                events,
-                query_name=query_name,
-                generation_id=generation_id,
-                connector_name=connector_name,
-                snapshot_end_offsets=None,
-            )
-            rows = [_clickhouse_row(generation_id, event) for event in events]
-            _write_clickhouse_batch(spark, rows)
-            if publish_ready:
-                _publish_generation(generation_id, query_name)
-                connection = _staging_connection()
-                try:
-                    with connection.cursor() as cursor:
-                        cursor.execute(
-                            """
-                            UPDATE metadata.streaming_generations
-                            SET status = 'ACTIVE', updated_at = CURRENT_TIMESTAMP
-                            WHERE query_name = %s AND generation_id = %s
-                            """,
-                            (query_name, generation_id),
-                        )
-                    connection.commit()
-                finally:
-                    connection.close()
-            LOGGER.info(
-                "Committed Spark microbatch %s with %s CDC records.",
-                batch_id,
-                len(events),
-            )
-        except Exception:
-            LOGGER.exception("Spark CDC microbatch %s failed.", batch_id)
-            raise
 
-    query = (
-        source.writeStream.queryName(query_name)
-        .option("checkpointLocation", checkpoint_dir)
-        .foreachBatch(process_batch)
-        .trigger(processingTime="10 seconds")
-        .start()
+def checkpoint_state(path):
+    """Read the persistent Spark query ID and latest committed batch."""
+    metadata = path / "metadata"
+    commits = path / "commits"
+    query_id = json.loads(metadata.read_text())["id"] if metadata.is_file() else ""
+    batch_id = max(
+        (int(item.name) for item in commits.glob("*") if item.name.isdecimal()),
+        default=-1,
     )
-    query.awaitTermination()
+    return query_id, batch_id
+
+
+def checked_checkpoint(path, sealed_query_id, sealed_batch_id):
+    query_id, checkpoint_batch = checkpoint_state(path)
+    if sealed_query_id and sealed_query_id != query_id:
+        raise RuntimeError("The CDC generation belongs to a different Spark checkpoint.")
+    if checkpoint_batch > sealed_batch_id or sealed_batch_id > checkpoint_batch + 1:
+        raise RuntimeError("The checkpoint and verified ClickHouse progress disagree.")
+
+
+def event_row(generation, batch_id, event):
+    fields = (
+        event["kafka_topic"], event["kafka_partition"], event["kafka_offset"],
+        event["source_table"], json_text(event["source_key"]), event["operation"],
+        json_text(event["before_image"]), json_text(event["after_image"]),
+        (event["source_commit_lsn"] or "").lower(), source_version_order(event),
+        event["source_snapshot_state"] or "",
+        int(event["source_timestamp"].timestamp() * 1000),
+    )
+    return (generation, batch_id, *fields, fingerprint(fields))
+
+
+class ClickHouseCDC:
+    def __init__(self, client, generation):
+        self.client = client
+        self.generation = generation
+
+    def query(self, sql, **params):
+        return self.client.query(
+            sql, parameters={"generation": self.generation, **params}
+        ).result_rows
+
+    def initialize(self, lineage, boundary, baseline):
+        self.client.insert(
+            "cdc_generations", [[self.generation, lineage, boundary, baseline]],
+            column_names=["generation_id", "lineage", "bootstrap_end", "source_baseline"],
+        )
+
+    def generation_info(self):
+        rows = self.query(
+            "SELECT DISTINCT lineage, bootstrap_end, source_baseline "
+            "FROM cdc_generations WHERE generation_id = {generation:String}"
+        )
+        if len(rows) > 1:
+            raise RuntimeError("Conflicting CDC bootstrap manifests.")
+        return rows[0] if rows else None
+
+    def latest_commit(self):
+        rows = self.query(
+            "SELECT batch_id, checkpoint_id, next_offsets FROM cdc_batch_commits "
+            "WHERE generation_id = {generation:String} ORDER BY batch_id DESC LIMIT 1"
+        )
+        return rows[0] if rows else (-1, "", {})
+
+    def verify_prefix(self, offsets):
+        rows = self.query(
+            "SELECT kafka_topic, kafka_partition, uniqExact(kafka_offset), "
+            "min(kafka_offset), max(kafka_offset) FROM cdc_committed_records "
+            "WHERE generation_id = {generation:String} GROUP BY kafka_topic, kafka_partition"
+        )
+        actual = {f"{topic}:{part}": (count, first, last)
+                  for topic, part, count, first, last in rows}
+        expected = {part: (end, 0, end - 1) for part, end in offsets.items() if end}
+        if actual != expected:
+            raise RuntimeError("Stored CDC records do not cover the sealed Kafka prefix.")
+
+    def seal(self, query_id, batch_id, rows, previous, broker_ends):
+        hashes = {(row[2], row[3], row[4]): row[-1] for row in rows}
+        if len(hashes) != len(rows):
+            raise RuntimeError("Spark returned duplicate transport positions in one batch.")
+        digest = fingerprint(sorted(hashes.items()))
+        existing = self.query(
+            "SELECT DISTINCT checkpoint_id, toString(record_digest), next_offsets FROM cdc_batch_commits "
+            "WHERE generation_id = {generation:String} AND batch_id = {batch:UInt64}",
+            batch=batch_id,
+        )
+        if existing:
+            if len(existing) != 1 or tuple(existing[0][:2]) != (query_id, digest):
+                raise RuntimeError("A replayed Spark batch differs from its verified commit.")
+            offsets = existing[0][2]
+        else:
+            offsets = advance_offsets(previous, list(hashes))
+            if rows:
+                self.client.insert("cdc_events", rows, column_names=EVENT_COLUMNS)
+
+        actual = self.query(
+            "SELECT DISTINCT kafka_topic, kafka_partition, kafka_offset, toString(record_hash) "
+            "FROM cdc_events WHERE generation_id = {generation:String} AND batch_id = {batch:UInt64}",
+            batch=batch_id,
+        )
+        if {tuple(row) for row in actual} != {(*position, record_hash) for position, record_hash in hashes.items()}:
+            raise RuntimeError(f"Stored ClickHouse records failed verification for batch {batch_id}.")
+
+        if not existing:
+            live_source_time = max((row[-2] for row in rows if row[7] in {"c", "u", "d"}), default=0)
+            self.client.insert(
+                "cdc_batch_commits",
+                [[self.generation, batch_id, query_id, digest, offsets, broker_ends, len(rows), live_source_time]],
+                column_names=[
+                    "generation_id", "batch_id", "checkpoint_id", "record_digest",
+                    "next_offsets", "broker_end_offsets", "records", "live_source_time_ms",
+                ],
+            )
+        return offsets
+
+    def publish_if_ready(self, boundary, offsets, source_baseline):
+        if any(offsets[part] < end for part, end in boundary.items()):
+            return
+        if self.query(
+            "SELECT 1 FROM cdc_publications WHERE generation_id = {generation:String} LIMIT 1"
+        ):
+            return
+        if any(boundary.values()):
+            self.verify_prefix(offsets)
+            candidates = self.query(
+                "SELECT DISTINCT commit_lsn FROM cdc_committed_records "
+                "WHERE generation_id = {generation:String} AND operation = 'r' "
+                "AND snapshot_state = 'last' ORDER BY commit_lsn DESC"
+            )
+            if not candidates or (source_baseline and source_baseline != candidates[0][0]):
+                raise RuntimeError("The completed initial snapshot has no matching retained last record.")
+            baseline = candidates[0][0]
+            conflicts = self.query(
+                "SELECT 1 FROM cdc_committed_records "
+                "WHERE generation_id = {generation:String} AND operation = 'r' "
+                "AND commit_lsn = {baseline:String} GROUP BY source_table, source_key "
+                "HAVING uniqExact(after_image) > 1 LIMIT 1",
+                baseline=baseline,
+            )
+            if conflicts:
+                raise RuntimeError("Conflicting row images exist in the completed initial snapshot.")
+        elif source_baseline:
+            baseline = source_baseline
+        else:
+            raise RuntimeError("An empty CDC bootstrap requires explicit snapshot-completion evidence.")
+
+        self.client.insert(
+            "cdc_publications", [[self.generation, baseline]],
+            column_names=["generation_id", "baseline_lsn"],
+        )
+        LOGGER.info("Published CDC generation %s.", self.generation)
+
+
+def run_stream(config, checkpoint):
+    import clickhouse_connect
+    from kafka import KafkaConsumer, TopicPartition
+    from pyspark.sql import SparkSession
+
+    bootstrap = config["KAFKA_BOOTSTRAP_SERVERS"]
+    prefix, database, schema = (config[key] for key in (
+        "DEBEZIUM_TOPIC_PREFIX", "SOURCE_DB_NAME", "SOURCE_DB_SCHEMA"
+    ))
+    connector = config["DEBEZIUM_CONNECTOR_NAME"]
+    topics = [f"{prefix}.{database}.{schema}.{table}" for table, _ in SOURCE_TABLES]
+    spark = (SparkSession.builder.appName(config["STREAMING_APP_NAME"])
+             .config("spark.sql.session.timeZone", "UTC").getOrCreate())
+    spark.sparkContext.setLogLevel("WARN")
+    try:
+        with closing(KafkaConsumer(
+            bootstrap_servers=bootstrap, enable_auto_commit=False, request_timeout_ms=30_000,
+        )) as consumer, clickhouse_connect.get_client(
+            host=config["WAREHOUSE_HOST"], port=int(config["WAREHOUSE_HTTP_PORT"]),
+            username=config["CDC_DB_USER"], password=config["CDC_DB_PASSWORD"],
+            database=config["CDC_DB_NAME"],
+        ) as client:
+            cluster, topic_ids = kafka_identity(spark, bootstrap, topics)
+            partitions = [
+                TopicPartition(topic, part)
+                for topic, (_, parts) in topic_ids.items() for part in parts
+            ]
+            store = ClickHouseCDC(client, config["STREAMING_GENERATION_ID"])
+            lineage = fingerprint([cluster, topic_ids, connector, config["STREAMING_QUERY_NAME"]])
+            generation_info = store.generation_info()
+            sealed_batch, sealed_id, offsets = store.latest_commit()
+            checked_checkpoint(checkpoint, sealed_id, sealed_batch)
+            if generation_info is None:
+                baseline = wait_for_snapshot(
+                    config["CONNECT_REST_URL"], connector, prefix, database,
+                    int(config["STREAMING_BOOTSTRAP_TIMEOUT_SECONDS"]),
+                )
+                beginnings, boundary = kafka_bounds(consumer, partitions)
+                if any(beginnings.values()):
+                    raise RuntimeError("The full initial Kafka snapshot is no longer retained.")
+                store.initialize(lineage, boundary, baseline)
+            else:
+                saved_lineage, boundary, baseline = generation_info
+                if saved_lineage != lineage:
+                    raise RuntimeError("Kafka topics or connector lineage changed for this generation.")
+
+            offsets = offsets or dict.fromkeys(boundary, 0)
+            beginnings, ends = kafka_bounds(consumer, partitions)
+            if any(not beginnings[part] <= offset <= ends[part] for part, offset in offsets.items()):
+                raise RuntimeError("Kafka does not retain the saved CDC continuation offsets.")
+            if sealed_batch >= 0:
+                store.verify_prefix(offsets)
+            store.publish_if_ready(boundary, offsets, baseline)
+
+            def process(frame, batch_id):
+                nonlocal offsets
+                try:
+                    rows = []
+                    for row in frame.select("topic", "partition", "offset", "key", "value").toLocalIterator():
+                        try:
+                            event = normalize_debezium_record(
+                                topic=row.topic, partition=row.partition, offset=row.offset,
+                                key=row.key, value=row.value, topic_prefix=prefix,
+                                expected_schema=schema, expected_database=database,
+                            )
+                            rows.append(event_row(store.generation, batch_id, event))
+                        except (TypeError, ValueError, KeyError):
+                            raise RuntimeError(
+                                f"Invalid CDC record {row.topic}[{row.partition}]@{row.offset}."
+                            ) from None
+                    query_id, _ = checkpoint_state(checkpoint)
+                    if not query_id:
+                        raise RuntimeError("Spark did not initialize its checkpoint identity.")
+                    _, broker_ends = kafka_bounds(consumer, partitions)
+                    offsets = store.seal(query_id, batch_id, rows, offsets, broker_ends)
+                    store.publish_if_ready(boundary, offsets, baseline)
+                    LOGGER.info("Verified CDC batch %s with %s records.", batch_id, len(rows))
+                except Exception as error:
+                    LOGGER.error("CDC batch %s failed (%s).", batch_id, type(error).__name__)
+                    if isinstance(error, RuntimeError):
+                        raise
+                    raise RuntimeError("CDC microbatch processing failed.") from None
+
+            query = (
+                spark.readStream.format("kafka")
+                .option("kafka.bootstrap.servers", bootstrap)
+                .option("subscribe", ",".join(topics))
+                .option("startingOffsets", "earliest")
+                .option("failOnDataLoss", "true")
+                .option("maxOffsetsPerTrigger", config["STREAMING_MAX_OFFSETS_PER_TRIGGER"])
+                .load().writeStream.queryName(config["STREAMING_QUERY_NAME"])
+                .option("checkpointLocation", str(checkpoint))
+                .trigger(processingTime=config["STREAMING_TRIGGER_INTERVAL"])
+                .foreachBatch(process).start()
+            )
+            query.awaitTermination()
+    finally:
+        spark.stop()
+
+
+def run():
+    config = os.environ
+    checkpoint = Path(config["STREAMING_CHECKPOINT_DIR"]).resolve()
+    mount = Path("/opt/spark/checkpoints")
+    if mount not in checkpoint.parents:
+        raise RuntimeError("STREAMING_CHECKPOINT_DIR must be under the persistent checkpoint mount.")
+    with (mount / ".cdc-writer.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("Another CDC writer holds the checkpoint volume lock.") from None
+        run_stream(config, checkpoint)
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     run()

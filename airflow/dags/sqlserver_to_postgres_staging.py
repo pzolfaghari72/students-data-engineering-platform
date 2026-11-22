@@ -1,9 +1,11 @@
 
-"""One-time consistent SQL Server snapshot into PostgreSQL staging."""
+"""Extract one consistent SQL Server snapshot and trigger its publication."""
 
+import os
 from datetime import UTC, datetime, timedelta
 
 from airflow.providers.standard.operators.python import PythonOperator
+from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.sdk import dag
 from airflow.task.trigger_rule import TriggerRule
 
@@ -17,8 +19,8 @@ from students_staging.loader import (
 
 @dag(
     dag_id=DAG_ID,
-    description="Initial full load from SQL Server into PostgreSQL staging.",
-    schedule=None,
+    description="Stage a full SQL Server snapshot and trigger its warehouse load.",
+    schedule=os.getenv("BATCH_SNAPSHOT_SCHEDULE") or None,
     start_date=datetime(2024, 1, 1, tzinfo=UTC),
     catchup=False,
     max_active_runs=1,
@@ -48,7 +50,17 @@ def sqlserver_to_postgres_staging():
         trigger_rule=TriggerRule.ALL_DONE,
     )
 
-    start >> snapshot >> finish
+    publish = TriggerDagRunOperator(
+        task_id="trigger_warehouse",
+        trigger_dag_id="postgres_to_clickhouse_warehouse",
+        trigger_run_id="staging__{{ ti.xcom_pull(task_ids='finish_pipeline_run') }}",
+        conf={
+            "source_run_id": "{{ ti.xcom_pull(task_ids='finish_pipeline_run') }}",
+        },
+        skip_when_already_exists=True,
+    )
+
+    start >> snapshot >> finish >> publish
 
 
 dag = sqlserver_to_postgres_staging()

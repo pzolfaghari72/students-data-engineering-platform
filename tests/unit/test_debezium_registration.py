@@ -84,6 +84,16 @@ class ConnectorRegistrationTests(unittest.TestCase):
             "http://connect:8083", "students", 10
         )
 
+    def test_detects_topic_lineage_drift(self):
+        with self.assertRaisesRegex(RuntimeError, "topic.prefix"):
+            register_connector.check_existing_config({"topic.prefix": "other"}, {"topic.prefix": "students"})
+
+    def test_accepts_equivalent_existing_table_filter(self):
+        register_connector.check_existing_config(
+            {"table.include.list": "dbo.Students,dbo.Grades"},
+            {"table.include.list": r"dbo\.Grades,dbo\.Students"},
+        )
+
     @patch("debezium.register_connector._request_json")
     def test_missing_connector_config_returns_none(self, request_json) -> None:
         request_json.side_effect = HTTPError(

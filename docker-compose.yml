@@ -25,33 +25,33 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
 
     # Container-to-container URL; this is not the host-published Airflow UI address.
-    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: ${AIRFLOW_API_SERVER_URL:?Set AIRFLOW_API_SERVER_URL}
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: ${AIRFLOW_API_SERVER_URL:-}
 
     # Airflow encryption and authentication secrets.
-    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:?Set AIRFLOW__CORE__FERNET_KEY in .env}
-    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?Set AIRFLOW_JWT_SECRET in .env}
-    AIRFLOW__API__SECRET_KEY: ${AIRFLOW__API__SECRET_KEY:?Set AIRFLOW__API__SECRET_KEY in .env}
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW__CORE__FERNET_KEY:-}
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:-}
+    AIRFLOW__API__SECRET_KEY: ${AIRFLOW__API__SECRET_KEY:-}
 
     # Airflow metadata database connection.
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:?Set AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD:?Set AIRFLOW_DB_PASSWORD (URL-encode special characters)}@${POSTGRES_HOST:?Set POSTGRES_HOST}:${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}/${AIRFLOW_DB_NAME:?Set AIRFLOW_DB_NAME}
 
     # Initial Airflow administrator credentials.
-    AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER:?Set AIRFLOW_ADMIN_USER}
-    AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:?Set AIRFLOW_ADMIN_PASSWORD}
-    AIRFLOW_ADMIN_EMAIL: ${AIRFLOW_ADMIN_EMAIL:?Set AIRFLOW_ADMIN_EMAIL}
+    AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER:-}
+    AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:-}
+    AIRFLOW_ADMIN_EMAIL: ${AIRFLOW_ADMIN_EMAIL:-}
 
     # Source SQL Server connection
-    SOURCE_DB_HOST: ${SOURCE_DB_HOST:?Set SOURCE_DB_HOST}
-    SOURCE_DB_PORT: ${SOURCE_DB_PORT:?Set SOURCE_DB_PORT}
-    SOURCE_DB_NAME: ${SOURCE_DB_NAME:?Set SOURCE_DB_NAME}
-    SOURCE_DB_USER: ${SOURCE_DB_USER:?Set SOURCE_DB_USER}
-    SOURCE_DB_PASSWORD: ${SOURCE_DB_PASSWORD:?Set SOURCE_DB_PASSWORD}
-    SOURCE_DB_ODBC_DRIVER: ${SOURCE_DB_ODBC_DRIVER:?Set SOURCE_DB_ODBC_DRIVER}
-    SOURCE_DB_SCHEMA: ${SOURCE_DB_SCHEMA:?Set SOURCE_DB_SCHEMA}
-    SOURCE_DB_ENCRYPT: ${SOURCE_DB_ENCRYPT:?Set SOURCE_DB_ENCRYPT}
-    SOURCE_DB_TRUST_SERVER_CERTIFICATE: ${SOURCE_DB_TRUST_SERVER_CERTIFICATE:?Set SOURCE_DB_TRUST_SERVER_CERTIFICATE}
-    SOURCE_DB_CONNECTION_TIMEOUT: ${SOURCE_DB_CONNECTION_TIMEOUT:?Set SOURCE_DB_CONNECTION_TIMEOUT}
-    SOURCE_DB_SNAPSHOT_ISOLATION: ${SOURCE_DB_SNAPSHOT_ISOLATION:?Set SOURCE_DB_SNAPSHOT_ISOLATION}
+    SOURCE_DB_HOST: ${SOURCE_DB_HOST:-}
+    SOURCE_DB_PORT: ${SOURCE_DB_PORT:-}
+    SOURCE_DB_NAME: ${SOURCE_DB_NAME:-}
+    SOURCE_DB_USER: ${SOURCE_DB_USER:-}
+    SOURCE_DB_PASSWORD: ${SOURCE_DB_PASSWORD:-}
+    SOURCE_DB_ODBC_DRIVER: ${SOURCE_DB_ODBC_DRIVER:-}
+    SOURCE_DB_SCHEMA: ${SOURCE_DB_SCHEMA:-}
+    SOURCE_DB_ENCRYPT: ${SOURCE_DB_ENCRYPT:-}
+    SOURCE_DB_TRUST_SERVER_CERTIFICATE: ${SOURCE_DB_TRUST_SERVER_CERTIFICATE:-}
+    SOURCE_DB_CONNECTION_TIMEOUT: ${SOURCE_DB_CONNECTION_TIMEOUT:-}
+    SOURCE_DB_SNAPSHOT_ISOLATION: ${SOURCE_DB_SNAPSHOT_ISOLATION:-}
 
     # PostgreSQL staging connection used by the SQL Server extraction DAG.
     STAGING_DB_HOST: ${POSTGRES_HOST:?Set POSTGRES_HOST}
@@ -62,19 +62,22 @@ x-airflow-common: &airflow-common
 
     # JDBC settings for the Spark warehouse task executed by LocalExecutor.
     STAGING_JDBC_URL: jdbc:postgresql://${POSTGRES_HOST:?Set POSTGRES_HOST}:${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}/${STAGING_DB_NAME:?Set STAGING_DB_NAME}
-    STAGING_JDBC_DRIVER: ${STAGING_JDBC_DRIVER:?Set STAGING_JDBC_DRIVER}
+    STAGING_JDBC_DRIVER: ${STAGING_JDBC_DRIVER:-}
     WAREHOUSE_JDBC_URL: jdbc:clickhouse:http://${CLICKHOUSE_HOST:?Set CLICKHOUSE_HOST}:${CLICKHOUSE_HTTP_PORT:?Set CLICKHOUSE_HTTP_PORT}/${WAREHOUSE_DB_NAME:?Set WAREHOUSE_DB_NAME}
     WAREHOUSE_DB_USER: ${WAREHOUSE_DB_USER:?Set WAREHOUSE_DB_USER}
     WAREHOUSE_DB_PASSWORD: ${WAREHOUSE_DB_PASSWORD:?Set WAREHOUSE_DB_PASSWORD}
-    WAREHOUSE_JDBC_DRIVER: ${WAREHOUSE_JDBC_DRIVER:?Set WAREHOUSE_JDBC_DRIVER}
-    STUDENT_ID_HMAC_KEY: ${STUDENT_ID_HMAC_KEY:?Set STUDENT_ID_HMAC_KEY}
-
-    # Debezium CDC stream consumed into history and SCD2.
-    KAFKA_BOOTSTRAP_SERVERS: "${KAFKA_HOST:?Set KAFKA_HOST}:${KAFKA_INTERNAL_PORT:?Set KAFKA_INTERNAL_PORT}"
-    DEBEZIUM_TOPIC_PREFIX: ${DEBEZIUM_TOPIC_PREFIX:?Set DEBEZIUM_TOPIC_PREFIX}
-    DEBEZIUM_CONNECTOR_NAME: ${DEBEZIUM_CONNECTOR_NAME:?Set DEBEZIUM_CONNECTOR_NAME}
-    CDC_MAX_RECORDS: ${CDC_MAX_RECORDS:?Set CDC_MAX_RECORDS}
-    CDC_MAX_SECONDS: ${CDC_MAX_SECONDS:?Set CDC_MAX_SECONDS}
+    WAREHOUSE_JDBC_DRIVER: ${WAREHOUSE_JDBC_DRIVER:-}
+    WAREHOUSE_HOST: ${CLICKHOUSE_HOST:?Set CLICKHOUSE_HOST}
+    WAREHOUSE_HTTP_PORT: ${CLICKHOUSE_HTTP_PORT:?Set CLICKHOUSE_HTTP_PORT}
+    WAREHOUSE_DB_NAME: ${WAREHOUSE_DB_NAME:?Set WAREHOUSE_DB_NAME}
+    STUDENT_ID_HMAC_KEY: ${STUDENT_ID_HMAC_KEY:-}
+    BATCH_SNAPSHOT_SCHEDULE: ${BATCH_SNAPSHOT_SCHEDULE:-}
+    SPARK_BATCH_MASTER: ${SPARK_BATCH_MASTER:-local[2]}
+    SPARK_BATCH_DRIVER_MEMORY: ${SPARK_BATCH_DRIVER_MEMORY:-768m}
+    SPARK_BATCH_SHUFFLE_PARTITIONS: ${SPARK_BATCH_SHUFFLE_PARTITIONS:-2}
+    SPARK_BATCH_READ_PARTITIONS: ${SPARK_BATCH_READ_PARTITIONS:-2}
+    SPARK_BATCH_FETCH_SIZE: ${SPARK_BATCH_FETCH_SIZE:-10000}
+    SPARK_BATCH_WRITE_SIZE: ${SPARK_BATCH_WRITE_SIZE:-10000}
 
     # Container timezone.
     TZ: ${TIMEZONE:-UTC}
@@ -105,7 +108,7 @@ services:
 
     # Expose PostgreSQL only on the local machine.
     ports:
-      - "127.0.0.1:15433:${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}"
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-15433}:${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}"
 
     # Persist PostgreSQL data.
     volumes:
@@ -205,10 +208,6 @@ services:
           -f /staging_ddl/metadata_schema.sql
         psql -v ON_ERROR_STOP=1 -h "$$STAGING_DB_HOST" -p "$$STAGING_DB_PORT" -U "$$STAGING_DB_USER" -d "$$STAGING_DB_NAME" \
           -f /staging_ddl/raw_tables.sql
-        psql -v ON_ERROR_STOP=1 -h "$$STAGING_DB_HOST" -p "$$STAGING_DB_PORT" -U "$$STAGING_DB_USER" -d "$$STAGING_DB_NAME" \
-          -f /staging_ddl/history_events.sql
-        psql -v ON_ERROR_STOP=1 -h "$$STAGING_DB_HOST" -p "$$STAGING_DB_PORT" -U "$$STAGING_DB_USER" -d "$$STAGING_DB_NAME" \
-          -f /staging_ddl/scd_schema.sql
 
     networks: [platform]
 
@@ -225,6 +224,10 @@ services:
       CLICKHOUSE_DB: ${WAREHOUSE_DB_NAME:?Set WAREHOUSE_DB_NAME}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
       WAREHOUSE_DB_NAME: ${WAREHOUSE_DB_NAME:?Set WAREHOUSE_DB_NAME}
+      CDC_DB_NAME: ${CDC_DB_NAME:-students_cdc}
+      CDC_DB_USER: ${CDC_DB_USER:-students_cdc_writer}
+      CDC_DB_PASSWORD: ${CDC_DB_PASSWORD:-}
+      CLICKHOUSE_DASHBOARD_GROUP_BY_BYTES: ${CLICKHOUSE_DASHBOARD_GROUP_BY_BYTES:-134217728}
       WAREHOUSE_DB_USER: ${WAREHOUSE_DB_USER:?Set WAREHOUSE_DB_USER}
       WAREHOUSE_DB_PASSWORD: ${WAREHOUSE_DB_PASSWORD:?Set WAREHOUSE_DB_PASSWORD}
       GRAFANA_DB_USER: ${GRAFANA_DB_USER:?Set GRAFANA_DB_USER}
@@ -235,14 +238,13 @@ services:
 
     # Expose HTTP and native client interfaces locally.
     ports:
-      - "127.0.0.1:18123:${CLICKHOUSE_HTTP_PORT:?Set CLICKHOUSE_HTTP_PORT}"
-      - "127.0.0.1:19000:${CLICKHOUSE_NATIVE_PORT:?Set CLICKHOUSE_NATIVE_PORT}"
+      - "127.0.0.1:${CLICKHOUSE_HOST_HTTP_PORT:-18123}:${CLICKHOUSE_HTTP_PORT:?Set CLICKHOUSE_HTTP_PORT}"
+      - "127.0.0.1:${CLICKHOUSE_HOST_NATIVE_PORT:-19000}:${CLICKHOUSE_NATIVE_PORT:?Set CLICKHOUSE_NATIVE_PORT}"
 
     # Persist warehouse data and mount custom server configuration.
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       - ./clickhouse/config:/etc/clickhouse-server/config.d:ro
-      - ./scripts/create_clickhouse_users.sh:/opt/clickhouse-setup/create_clickhouse_users.sh:ro
 
     # Verify that ClickHouse can execute queries.
     healthcheck:
@@ -273,78 +275,12 @@ services:
     entrypoint: ["/bin/bash", "-euc"]
     command:
       - |
-        for ddl in warehouse_ddl.sql cdc_warehouse_ddl.sql; do
-          test -f "/warehouse_ddl/$$ddl"
-          printf 'Applying %s\n' "$$ddl"
-          clickhouse-client \
-            --host 127.0.0.1 \
-            --port "$$CLICKHOUSE_NATIVE_PORT" \
-            --user "$$CLICKHOUSE_ADMIN_USER" \
-            --password "$$CLICKHOUSE_ADMIN_PASSWORD" \
-            --database "$$WAREHOUSE_DB_NAME" \
-            --multiquery < "/warehouse_ddl/$$ddl"
-        done
         test -f /opt/clickhouse-setup/create_clickhouse_users.sh
         bash -e /opt/clickhouse-setup/create_clickhouse_users.sh
-        printf 'ClickHouse schema and user initialization completed.\n'
+        printf 'ClickHouse schemas and role grants initialized.\n'
 
-
-  # One-shot Spark batch job; keep behind the batch profile.
-  # Prefer postgres_to_clickhouse_warehouse in Airflow for routine batch loads.
-  spark-warehouse:
-    image: students-platform-spark:3.5.6
-    build:
-      context: ./spark
-      dockerfile: Dockerfile
-    profiles: ["batch"]
-    restart: "no"
-    mem_limit: 1536m
-    cpus: 1.5
-    depends_on:
-      postgres:
-        condition: service_healthy
-      staging-schema-init:
-        condition: service_completed_successfully
-      clickhouse:
-        condition: service_healthy
-      clickhouse-init:
-        condition: service_completed_successfully
-    environment:
-      STAGING_JDBC_URL: jdbc:postgresql://${POSTGRES_HOST:?Set POSTGRES_HOST}:${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}/${STAGING_DB_NAME:?Set STAGING_DB_NAME}
-      STAGING_DB_USER: ${STAGING_DB_USER:?Set STAGING_DB_USER}
-      STAGING_DB_PASSWORD: ${STAGING_DB_PASSWORD:?Set STAGING_DB_PASSWORD}
-      STAGING_JDBC_DRIVER: ${STAGING_JDBC_DRIVER:?Set STAGING_JDBC_DRIVER}
-      WAREHOUSE_HOST: ${CLICKHOUSE_HOST:?Set CLICKHOUSE_HOST}
-      WAREHOUSE_HTTP_PORT: ${CLICKHOUSE_HTTP_PORT:?Set CLICKHOUSE_HTTP_PORT}
-      WAREHOUSE_JDBC_URL: jdbc:clickhouse:http://${CLICKHOUSE_HOST:?Set CLICKHOUSE_HOST}:${CLICKHOUSE_HTTP_PORT:?Set CLICKHOUSE_HTTP_PORT}/${WAREHOUSE_DB_NAME:?Set WAREHOUSE_DB_NAME}
-      WAREHOUSE_DB_USER: ${WAREHOUSE_DB_USER:?Set WAREHOUSE_DB_USER}
-      WAREHOUSE_DB_PASSWORD: ${WAREHOUSE_DB_PASSWORD:?Set WAREHOUSE_DB_PASSWORD}
-      WAREHOUSE_JDBC_DRIVER: ${WAREHOUSE_JDBC_DRIVER:?Set WAREHOUSE_JDBC_DRIVER}
-      STUDENT_ID_HMAC_KEY: ${STUDENT_ID_HMAC_KEY:?Set STUDENT_ID_HMAC_KEY}
-    volumes:
-      - ./spark:/opt/spark-apps:ro
-    entrypoint: ["/opt/spark/bin/spark-submit"]
-    command:
-      - "--py-files"
-      - "/opt/spark-apps/warehouse_keys.py"
-      - "--master"
-      - "local[2]"
-      - "--driver-memory"
-      - "768m"
-      - "--conf"
-      - "spark.jars.ivy=/tmp/.ivy2"
-      - "--conf"
-      - "spark.ui.showConsoleProgress=false"
-      - "--conf"
-      - "spark.sql.shuffle.partitions=2"
-      - "--packages"
-      - "org.postgresql:postgresql:42.7.5,com.clickhouse:clickhouse-jdbc-all:0.9.8"
-      - "/opt/spark-apps/load_warehouse.py"
-    networks: [platform]
-
-
-  # Kafka: Distributed event streaming and messaging platform.
   kafka:
+    profiles: ["cdc"]
     image: apache/kafka:3.9.1
     restart: unless-stopped
     stop_grace_period: 60s
@@ -352,7 +288,7 @@ services:
     cpus: 1.0
     environment:
       # Unique Kafka cluster identifier.
-      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID:-4L6g3nShT-eMCtK--X86sw}
 
       # Single-node KRaft configuration.
       KAFKA_NODE_ID: "1"
@@ -363,13 +299,13 @@ services:
       KAFKA_LOG_DIRS: /var/lib/kafka/data
 
       # Internal, controller, and external network listeners.
-      KAFKA_LISTENERS: PLAINTEXT://:${KAFKA_INTERNAL_PORT:?Set KAFKA_INTERNAL_PORT},CONTROLLER://:${KAFKA_CONTROLLER_PORT:?Set KAFKA_CONTROLLER_PORT},EXTERNAL://:${KAFKA_EXTERNAL_PORT:?Set KAFKA_EXTERNAL_PORT}
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${KAFKA_HOST:?Set KAFKA_HOST}:${KAFKA_INTERNAL_PORT:?Set KAFKA_INTERNAL_PORT},EXTERNAL://${KAFKA_EXTERNAL_ADVERTISED_HOST:?Set KAFKA_EXTERNAL_ADVERTISED_HOST}:19094
+      KAFKA_LISTENERS: PLAINTEXT://:${KAFKA_INTERNAL_PORT:-9092},CONTROLLER://:${KAFKA_CONTROLLER_PORT:-9093},EXTERNAL://:${KAFKA_EXTERNAL_PORT:-9094}
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${KAFKA_HOST:-kafka}:${KAFKA_INTERNAL_PORT:-9092},EXTERNAL://${KAFKA_EXTERNAL_ADVERTISED_HOST:-localhost}:${KAFKA_HOST_PORT:-19094}
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
 
       # KRaft controller quorum configuration.
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@${KAFKA_HOST:?Set KAFKA_HOST}:${KAFKA_CONTROLLER_PORT:?Set KAFKA_CONTROLLER_PORT}
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@${KAFKA_HOST:-kafka}:${KAFKA_CONTROLLER_PORT:-9093}
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
 
       # Replication settings for a single-node development cluster.
@@ -381,21 +317,31 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
 
       # Default partition count for newly created topics.
-      KAFKA_NUM_PARTITIONS: ${KAFKA_NUM_PARTITIONS:?Set KAFKA_NUM_PARTITIONS}
-      KAFKA_LOG_RETENTION_MS: ${KAFKA_TOPIC_RETENTION_MS:?Set KAFKA_TOPIC_RETENTION_MS}
-      KAFKA_HEAP_OPTS: ${KAFKA_HEAP_OPTS:?Set KAFKA_HEAP_OPTS}
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      CONNECT_STATUS_STORAGE_TOPIC: ${CONNECT_STATUS_STORAGE_TOPIC:-connect_statuses}
+      CONNECT_OFFSET_STORAGE_TOPIC: ${CONNECT_OFFSET_STORAGE_TOPIC:-connect_offsets}
+      CONNECT_CONFIG_STORAGE_TOPIC: ${CONNECT_CONFIG_STORAGE_TOPIC:-connect_configs}
+      KAFKA_INTERNAL_PORT: ${KAFKA_INTERNAL_PORT:-9092}
+      DEBEZIUM_TOPIC_PREFIX: ${DEBEZIUM_TOPIC_PREFIX:-students}
+      DEBEZIUM_SCHEMA_HISTORY_TOPIC: ${DEBEZIUM_SCHEMA_HISTORY_TOPIC:-schema-history.students}
+      SOURCE_DB_NAME: ${SOURCE_DB_NAME:-}
+      SOURCE_DB_SCHEMA: ${SOURCE_DB_SCHEMA:-}
+      KAFKA_NUM_PARTITIONS: ${KAFKA_NUM_PARTITIONS:-1}
+      KAFKA_LOG_RETENTION_MS: ${KAFKA_TOPIC_RETENTION_MS:-604800000}
+      KAFKA_HEAP_OPTS: ${KAFKA_HEAP_OPTS:--Xms256m -Xmx512m}
 
     # Expose the external Kafka listener locally.
     ports:
-      - "127.0.0.1:19094:${KAFKA_EXTERNAL_PORT:?Set KAFKA_EXTERNAL_PORT}"
+      - "127.0.0.1:${KAFKA_HOST_PORT:-19094}:${KAFKA_EXTERNAL_PORT:-9094}"
 
     # Persist Kafka topics, logs, and metadata.
     volumes:
       - kafka-data:/var/lib/kafka/data
+      - ./scripts/prepare_cdc_topics.sh:/opt/platform/prepare_cdc_topics.sh:ro
 
     # Check Kafka broker availability.
     healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:${KAFKA_INTERNAL_PORT} --list >/dev/null 2>&1"]
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:$$KAFKA_INTERNAL_PORT --list >/dev/null 2>&1"]
       interval: 10s
       timeout: 10s
       retries: 12
@@ -406,6 +352,7 @@ services:
 
   # Debezium Kafka Connect: Run connectors for CDC and data integration.
   connect:
+    profiles: ["cdc"]
     image: students-platform-connect:2.7.3
     build:
       context: ./debezium
@@ -422,29 +369,32 @@ services:
         condition: service_healthy
 
     environment:
-      BOOTSTRAP_SERVERS: "${KAFKA_HOST:?Set KAFKA_HOST}:${KAFKA_INTERNAL_PORT:?Set KAFKA_INTERNAL_PORT}"
-      GROUP_ID: "1"
+      BOOTSTRAP_SERVERS: "${KAFKA_HOST:-kafka}:${KAFKA_INTERNAL_PORT:-9092}"
+      GROUP_ID: ${CONNECT_GROUP_ID:-1}
+      CONNECT_CONFIG_PROVIDERS: env
+      CONNECT_CONFIG_PROVIDERS_ENV_CLASS: org.apache.kafka.common.config.provider.EnvVarConfigProvider
+      CDC_SOURCE_PASSWORD: ${SOURCE_CDC_PASSWORD:-${SOURCE_DB_PASSWORD}}
 
       # Kafka topics used to store connector configurations, offsets, and status.
-      CONFIG_STORAGE_TOPIC: connect_configs
+      CONFIG_STORAGE_TOPIC: ${CONNECT_CONFIG_STORAGE_TOPIC:-connect_configs}
       CONFIG_STORAGE_REPLICATION_FACTOR: "1"
-      OFFSET_STORAGE_TOPIC: connect_offsets
+      OFFSET_STORAGE_TOPIC: ${CONNECT_OFFSET_STORAGE_TOPIC:-connect_offsets}
       OFFSET_STORAGE_REPLICATION_FACTOR: "1"
-      STATUS_STORAGE_TOPIC: connect_statuses
+      STATUS_STORAGE_TOPIC: ${CONNECT_STATUS_STORAGE_TOPIC:-connect_statuses}
       STATUS_STORAGE_REPLICATION_FACTOR: "1"
 
       # Kafka Connect REST API configuration.
       # Debezium 2.7 entrypoint expects ADVERTISED_HOST_NAME / ADVERTISED_PORT.
-      ADVERTISED_HOST_NAME: ${CONNECT_HOST:?Set CONNECT_HOST}
-      ADVERTISED_PORT: ${CONNECT_INTERNAL_PORT:?Set CONNECT_INTERNAL_PORT}
-      REST_PORT: ${CONNECT_INTERNAL_PORT:?Set CONNECT_INTERNAL_PORT}
-      KAFKA_HEAP_OPTS: ${CONNECT_HEAP_OPTS:?Set CONNECT_HEAP_OPTS}
+      ADVERTISED_HOST_NAME: ${CONNECT_HOST:-connect}
+      ADVERTISED_PORT: ${CONNECT_INTERNAL_PORT:-8083}
+      REST_PORT: ${CONNECT_INTERNAL_PORT:-8083}
+      KAFKA_HEAP_OPTS: ${CONNECT_HEAP_OPTS:--Xms512m -Xmx768m}
       # Expose Debezium runtime metrics for diagnostics.
-      KAFKA_OPTS: "-javaagent:/opt/kafka/libs/jmx_prometheus_javaagent.jar=${CONNECT_METRICS_PORT:?Set CONNECT_METRICS_PORT}:/opt/kafka/config/jmx_exporter.yml"
+      KAFKA_OPTS: "-javaagent:/opt/kafka/libs/jmx_prometheus_javaagent.jar=${CONNECT_METRICS_PORT:-9404}:/opt/kafka/config/jmx_exporter.yml"
 
     # Expose the Kafka Connect REST API locally.
     ports:
-      - "127.0.0.1:18083:${CONNECT_INTERNAL_PORT:?Set CONNECT_INTERNAL_PORT}"
+      - "127.0.0.1:${CONNECT_HOST_PORT:-18083}:${CONNECT_INTERNAL_PORT:-8083}"
 
     # Worker REST readiness; connector tasks and snapshot readiness are separate.
     # curl is supplied by the Debezium base image; retain it in the custom image.
@@ -462,27 +412,28 @@ services:
   # Create/check the SQL Server connector; reuse the existing registration script.
   # Success means connector readiness, not that its initial snapshot has finished.
   debezium-register:
+    profiles: ["cdc"]
     image: python:3.12-alpine
     restart: "no"
     depends_on:
       connect:
         condition: service_healthy
     environment:
-      CONNECT_REST_URL: "http://${CONNECT_HOST:?Set CONNECT_HOST}:${CONNECT_INTERNAL_PORT:?Set CONNECT_INTERNAL_PORT}"
-      CONNECTOR_HEALTH_TIMEOUT_SECONDS: ${CONNECTOR_HEALTH_TIMEOUT_SECONDS:?Set CONNECTOR_HEALTH_TIMEOUT_SECONDS}
-      DEBEZIUM_CONNECTOR_NAME: ${DEBEZIUM_CONNECTOR_NAME:?Set DEBEZIUM_CONNECTOR_NAME}
-      DEBEZIUM_TOPIC_PREFIX: ${DEBEZIUM_TOPIC_PREFIX:?Set DEBEZIUM_TOPIC_PREFIX}
-      DEBEZIUM_SCHEMA_HISTORY_TOPIC: ${DEBEZIUM_SCHEMA_HISTORY_TOPIC:?Set DEBEZIUM_SCHEMA_HISTORY_TOPIC}
-      DEBEZIUM_SNAPSHOT_MODE: ${DEBEZIUM_SNAPSHOT_MODE:?Set DEBEZIUM_SNAPSHOT_MODE}
-      KAFKA_BOOTSTRAP_SERVERS: "${KAFKA_HOST:?Set KAFKA_HOST}:${KAFKA_INTERNAL_PORT:?Set KAFKA_INTERNAL_PORT}"
-      SOURCE_DB_HOST: ${SOURCE_DB_HOST:?Set SOURCE_DB_HOST}
-      SOURCE_DB_PORT: ${SOURCE_DB_PORT:?Set SOURCE_DB_PORT}
-      SOURCE_DB_NAME: ${SOURCE_DB_NAME:?Set SOURCE_DB_NAME}
-      SOURCE_DB_USER: ${SOURCE_DB_USER:?Set SOURCE_DB_USER}
-      SOURCE_DB_PASSWORD: ${SOURCE_DB_PASSWORD:?Set SOURCE_DB_PASSWORD}
-      SOURCE_DB_SCHEMA: ${SOURCE_DB_SCHEMA:?Set SOURCE_DB_SCHEMA}
-      SOURCE_DB_ENCRYPT: ${SOURCE_DB_ENCRYPT:?Set SOURCE_DB_ENCRYPT}
-      SOURCE_DB_TRUST_SERVER_CERTIFICATE: ${SOURCE_DB_TRUST_SERVER_CERTIFICATE:?Set SOURCE_DB_TRUST_SERVER_CERTIFICATE}
+      CONNECT_REST_URL: "http://${CONNECT_HOST:-connect}:${CONNECT_INTERNAL_PORT:-8083}"
+      CONNECTOR_HEALTH_TIMEOUT_SECONDS: ${CONNECTOR_HEALTH_TIMEOUT_SECONDS:-120}
+      DEBEZIUM_CONNECTOR_NAME: ${DEBEZIUM_CONNECTOR_NAME:-students-sqlserver}
+      DEBEZIUM_TOPIC_PREFIX: ${DEBEZIUM_TOPIC_PREFIX:-students}
+      DEBEZIUM_SCHEMA_HISTORY_TOPIC: ${DEBEZIUM_SCHEMA_HISTORY_TOPIC:-schema-history.students}
+      DEBEZIUM_SNAPSHOT_ISOLATION_MODE: ${DEBEZIUM_SNAPSHOT_ISOLATION_MODE:-snapshot}
+      DEBEZIUM_SNAPSHOT_MODE: ${DEBEZIUM_SNAPSHOT_MODE:-initial}
+      KAFKA_BOOTSTRAP_SERVERS: "${KAFKA_HOST:-kafka}:${KAFKA_INTERNAL_PORT:-9092}"
+      SOURCE_DB_HOST: ${SOURCE_DB_HOST:-}
+      SOURCE_DB_PORT: ${SOURCE_DB_PORT:-}
+      SOURCE_DB_NAME: ${SOURCE_DB_NAME:-}
+      SOURCE_DB_USER: ${SOURCE_CDC_USER:-${SOURCE_DB_USER}}
+      SOURCE_DB_SCHEMA: ${SOURCE_DB_SCHEMA:-}
+      SOURCE_DB_ENCRYPT: ${SOURCE_DB_ENCRYPT:-}
+      SOURCE_DB_TRUST_SERVER_CERTIFICATE: ${SOURCE_DB_TRUST_SERVER_CERTIFICATE:-}
       PYTHONPATH: /opt
     volumes:
       - ./debezium:/opt/debezium:ro
@@ -491,26 +442,17 @@ services:
     networks: [platform]
 
 
-  # Opt-in continuous consumer. Before enabling this profile:
-  # - fix/verify Spark Python compatibility with students_staging.cdc_loader;
-  # - pause the Airflow CDC DAG and wait for its active task to finish;
-  # - reconcile old checkpoints with any rebuilt PostgreSQL/ClickHouse sinks.
-  # Registration completion is not initial snapshot completion.
   spark-cdc-stream:
     image: students-platform-spark:3.5.6
     build:
       context: ./spark
       dockerfile: Dockerfile
     profiles: ["streaming"]
-    restart: no
+    restart: "on-failure:3"
     stop_grace_period: 60s
-    mem_limit: 1536m
-    cpus: 1.5
+    mem_limit: ${SPARK_STREAM_MEMORY_LIMIT:-1536m}
+    cpus: ${SPARK_STREAM_CPUS:-1.5}
     depends_on:
-      postgres:
-        condition: service_healthy
-      staging-schema-init:
-        condition: service_completed_successfully
       clickhouse:
         condition: service_healthy
       clickhouse-init:
@@ -521,32 +463,27 @@ services:
         condition: service_completed_successfully
     environment:
       PYTHONPATH: /opt/app
-      STREAMING_APP_NAME: ${STREAMING_APP_NAME:?Set STREAMING_APP_NAME}
-      STREAMING_QUERY_NAME: ${STREAMING_QUERY_NAME:?Set STREAMING_QUERY_NAME}
+      STREAMING_APP_NAME: ${STREAMING_APP_NAME:-StudentsCdcStreaming}
+      STREAMING_GENERATION_ID: ${STREAMING_GENERATION_ID:-students-cdc-v1}
+      STREAMING_TRIGGER_INTERVAL: ${STREAMING_TRIGGER_INTERVAL:-5 seconds}
+      STREAMING_BOOTSTRAP_TIMEOUT_SECONDS: ${STREAMING_BOOTSTRAP_TIMEOUT_SECONDS:-3600}
+      STREAMING_QUERY_NAME: ${STREAMING_QUERY_NAME:-students-cdc}
       # This path must be under /opt/spark/checkpoints, the persistent mount.
-      STREAMING_CHECKPOINT_DIR: ${STREAMING_CHECKPOINT_DIR:?Set STREAMING_CHECKPOINT_DIR}
-      STREAMING_MAX_OFFSETS_PER_TRIGGER: ${STREAMING_MAX_OFFSETS_PER_TRIGGER:?Set STREAMING_MAX_OFFSETS_PER_TRIGGER}
-      KAFKA_BOOTSTRAP_SERVERS: "${KAFKA_HOST:?Set KAFKA_HOST}:${KAFKA_INTERNAL_PORT:?Set KAFKA_INTERNAL_PORT}"
-      DEBEZIUM_TOPIC_PREFIX: ${DEBEZIUM_TOPIC_PREFIX:?Set DEBEZIUM_TOPIC_PREFIX}
-      DEBEZIUM_CONNECTOR_NAME: ${DEBEZIUM_CONNECTOR_NAME:?Set DEBEZIUM_CONNECTOR_NAME}
-     # Read Debezium's saved source offsets during streaming bootstrap.
-      CONNECT_REST_URL: "http://${CONNECT_HOST:?Set CONNECT_HOST}:${CONNECT_INTERNAL_PORT:?Set CONNECT_INTERNAL_PORT}"
-      SOURCE_DB_NAME: ${SOURCE_DB_NAME:?Set SOURCE_DB_NAME}
-      SOURCE_DB_SCHEMA: ${SOURCE_DB_SCHEMA:?Set SOURCE_DB_SCHEMA}
-      STAGING_DB_HOST: ${POSTGRES_HOST:?Set POSTGRES_HOST}
-      STAGING_DB_PORT: ${POSTGRES_CONTAINER_PORT:?Set POSTGRES_CONTAINER_PORT}
-      STAGING_DB_NAME: ${STAGING_DB_NAME:?Set STAGING_DB_NAME}
-      STAGING_DB_USER: ${STAGING_DB_USER:?Set STAGING_DB_USER}
-      STAGING_DB_PASSWORD: ${STAGING_DB_PASSWORD:?Set STAGING_DB_PASSWORD}
+      STREAMING_CHECKPOINT_DIR: ${CDC_CHECKPOINT_DIR:-/opt/spark/checkpoints/students-cdc-warehouse}
+      STREAMING_MAX_OFFSETS_PER_TRIGGER: ${STREAMING_MAX_OFFSETS_PER_TRIGGER:-10000}
+      KAFKA_BOOTSTRAP_SERVERS: "${KAFKA_HOST:-kafka}:${KAFKA_INTERNAL_PORT:-9092}"
+      DEBEZIUM_TOPIC_PREFIX: ${DEBEZIUM_TOPIC_PREFIX:-students}
+      DEBEZIUM_CONNECTOR_NAME: ${DEBEZIUM_CONNECTOR_NAME:-students-sqlserver}
+      # Read Debezium's saved source offsets during streaming bootstrap.
+      CONNECT_REST_URL: "http://${CONNECT_HOST:-connect}:${CONNECT_INTERNAL_PORT:-8083}"
+      SOURCE_DB_NAME: ${SOURCE_DB_NAME:-}
+      SOURCE_DB_SCHEMA: ${SOURCE_DB_SCHEMA:-}
       WAREHOUSE_HOST: ${CLICKHOUSE_HOST:?Set CLICKHOUSE_HOST}
       WAREHOUSE_HTTP_PORT: ${CLICKHOUSE_HTTP_PORT:?Set CLICKHOUSE_HTTP_PORT}
-      WAREHOUSE_DB_NAME: ${WAREHOUSE_DB_NAME:?Set WAREHOUSE_DB_NAME}
-      WAREHOUSE_DB_USER: ${WAREHOUSE_DB_USER:?Set WAREHOUSE_DB_USER}
-      WAREHOUSE_DB_PASSWORD: ${WAREHOUSE_DB_PASSWORD:?Set WAREHOUSE_DB_PASSWORD}
-      WAREHOUSE_JDBC_DRIVER: ${WAREHOUSE_JDBC_DRIVER:?Set WAREHOUSE_JDBC_DRIVER}
-      WAREHOUSE_WRITE_BATCH_SIZE: ${WAREHOUSE_WRITE_BATCH_SIZE:?Set WAREHOUSE_WRITE_BATCH_SIZE}
-      STREAMING_KAFKA_GROUP_ID: ${STREAMING_KAFKA_GROUP_ID:?Set STREAMING_KAFKA_GROUP_ID}
-      TZ: ${TIMEZONE:?Set TIMEZONE}
+      CDC_DB_NAME: ${CDC_DB_NAME:-students_cdc}
+      CDC_DB_USER: ${CDC_DB_USER:-students_cdc_writer}
+      CDC_DB_PASSWORD: ${CDC_DB_PASSWORD:-}
+      TZ: ${TIMEZONE:-UTC}
     volumes:
       - ./spark:/opt/spark-apps:ro
       - ./airflow/dags/students_staging:/opt/app/students_staging:ro
@@ -554,17 +491,17 @@ services:
     entrypoint: ["/opt/spark/bin/spark-submit"]
     command:
       - "--master"
-      - "local[2]"
+      - "${SPARK_STREAM_MASTER:-local[2]}"
       - "--driver-memory"
-      - "768m"
+      - "${SPARK_STREAM_DRIVER_MEMORY:-768m}"
       - "--conf"
       - "spark.jars.ivy=/tmp/.ivy2"
       - "--conf"
       - "spark.ui.showConsoleProgress=false"
       - "--conf"
-      - "spark.sql.shuffle.partitions=2"
+      - "spark.sql.shuffle.partitions=${SPARK_STREAM_SHUFFLE_PARTITIONS:-2}"
       - "--packages"
-      - "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.6,org.postgresql:postgresql:42.7.5,com.clickhouse:clickhouse-jdbc-all:0.9.8"
+      - "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.6"
       - "/opt/spark-apps/stream_cdc.py"
     networks: [platform]
 
@@ -602,7 +539,7 @@ services:
         condition: service_completed_successfully
     command: api-server
     ports:
-      - "127.0.0.1:18080:8080"
+      - "127.0.0.1:${AIRFLOW_HOST_PORT:-18080}:8080"
     # Check API + database only. Requiring scheduler health here would create
     # a startup cycle because the scheduler waits for this API.
     healthcheck:
@@ -669,12 +606,13 @@ services:
       GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:?Set GRAFANA_DB_PASSWORD in .env}
       GRAFANA_DB_HOST: ${CLICKHOUSE_HOST:?Set CLICKHOUSE_HOST}
       GRAFANA_DB_NATIVE_PORT: ${CLICKHOUSE_NATIVE_PORT:?Set CLICKHOUSE_NATIVE_PORT}
+      CDC_DB_NAME: ${CDC_DB_NAME:-students_cdc}
       WAREHOUSE_DB_NAME: ${WAREHOUSE_DB_NAME:?Set WAREHOUSE_DB_NAME in .env}
       TZ: ${TIMEZONE:-UTC}
 
     # Expose Grafana only on the local machine.
     ports:
-      - "127.0.0.1:13000:3000"
+      - "127.0.0.1:${GRAFANA_HOST_PORT:-13000}:3000"
 
     # Persist Grafana state and provision the ClickHouse data source/dashboard.
     volumes:

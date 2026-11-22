@@ -1,33 +1,7 @@
-# ADR-004: Docker Compose Deployment
+# ADR-004 — Single-host Compose deployment
 
-## Status
+**Status:** Accepted
 
-Accepted for the local learning environment.
+Use Compose, a bridge network, loopback host bindings and named volumes. Airflow LocalExecutor launches the Spark batch job. A separately managed Spark service owns the CDC query. Kafka and Connect start with the CDC profile, and the stream starts with the streaming profile. Load deployment values from the ignored `.env`; use the template to document the contract.
 
-## Context
-
-The platform must be reproducible on a developer workstation with limited
-memory and a manageable number of technologies.
-
-## Decision
-
-Use a single Docker Compose project with one bridge network, named volumes and
-profiles for batch, CDC, streaming, business dashboards and one-shot tools.
-
-## Alternatives considered
-
-- Kubernetes or multi-node orchestration: excess setup/resource complexity
-  for the intended local lab.
-- Start every service by default: unnecessary memory use and risky consumer
-  ownership.
-
-## Consequences
-
-Profiles allow selective startup, but the service dependency graph still
-controls what Compose starts. Single-node Kafka replication factor one and
-local database volumes are not highly available.
-
-## Implementation references
-
-`docker-compose.yml`, `Makefile`, and
-[Compose service inventory](../03-infrastructure/docker-compose.md).
+This keeps the platform reproducible on a developer machine. Each local volume has a compatible backup and restore boundary described in the operations guide. The deployment has a single-host failure domain.

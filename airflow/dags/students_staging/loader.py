@@ -121,14 +121,13 @@ def create_pipeline_run(**context: Any) -> int:
 def load_source_table(
     source_table: str,
     target_table: str,
-    source_connection: pyodbc.Connection | None = None,
+    source_connection: pyodbc.Connection,
     **context: Any,
 ) -> dict[str, int | str]:
     """Copy one table in bounded chunks using the supplied source transaction."""
     run_id = _run_id_from_context(context)
     source_schema = _required_env("SOURCE_DB_SCHEMA")
     batch_id: int | None = None
-    owns_source_connection = source_connection is None
     source_cursor: pyodbc.Cursor | None = None
     target_connection = _staging_connection()
     loaded_rows = 0
@@ -169,22 +168,14 @@ def load_source_table(
             batch_id,
         )
 
-        if source_connection is None:
-            source_connection = pyodbc.connect(
-                _sqlserver_connection_string(),
-                autocommit=False,
-            )
-            with source_connection.cursor() as isolation_cursor:
-                isolation_cursor.execute(
-                    f"SET TRANSACTION ISOLATION LEVEL "
-                    f"{_required_env('SOURCE_DB_SNAPSHOT_ISOLATION')}"
-                )
-        source_cursor = source_connection.cursor()
-        source_cursor.execute(
-            "SELECT * FROM "
+        qualified_source = (
             f"{_quote_sqlserver_identifier(source_schema)}."
             f"{_quote_sqlserver_identifier(source_table)}"
         )
+        source_cursor = source_connection.cursor()
+        source_cursor.execute(f"SELECT COUNT_BIG(*) FROM {qualified_source}")
+        source_rows_expected = int(source_cursor.fetchone()[0])
+        source_cursor.execute(f"SELECT * FROM {qualified_source}")
         if source_cursor.description is None:
             raise AirflowException(
                 f"SQL Server returned no columns for {source_schema}.{source_table}."
@@ -244,13 +235,27 @@ def load_source_table(
         # Mark the batch complete and update the latest successful table status.
         with target_connection.cursor() as cursor:
             cursor.execute(
+                sql.SQL('SELECT count(*) FROM raw.{} WHERE "_batch_id" = %s').format(
+                    sql.Identifier(target_table)
+                ),
+                (batch_id,),
+            )
+            staged_rows = int(cursor.fetchone()[0])
+            if not source_rows_expected == loaded_rows == staged_rows:
+                raise AirflowException(
+                    f"Reconciliation failed for {source_table} batch {batch_id}: "
+                    f"source={source_rows_expected}, fetched={loaded_rows}, staged={staged_rows}."
+                )
+            cursor.execute(
                 """
                 UPDATE metadata.extraction_batches
                 SET status = 'SUCCESS',
-                    completed_at = CURRENT_TIMESTAMP
+                    completed_at = CURRENT_TIMESTAMP,
+                    source_rows_expected = %s,
+                    inserted_rows = %s
                 WHERE batch_id = %s
                 """,
-                (batch_id,),
+                (source_rows_expected, staged_rows, batch_id),
             )
             cursor.execute(
                 """
@@ -295,7 +300,7 @@ def load_source_table(
                             error_message = %s
                         WHERE batch_id = %s
                         """,
-                        (f"{type(error).__name__}: {error}", batch_id),
+                        (type(error).__name__, batch_id),
                     )
                     cursor.execute(
                         """
@@ -316,31 +321,38 @@ def load_source_table(
                 LOGGER.exception(
                     "Could not mark batch_id=%s as failed", batch_id
                 )
-        LOGGER.exception(
-            "Failed loading source table %s.%s (batch_id=%s)",
+        LOGGER.error(
+            "Failed loading source table %s.%s (batch_id=%s, error=%s)",
             source_schema,
             source_table,
             batch_id,
+            type(error).__name__,
         )
-        raise
+        raise AirflowException(f"Snapshot extraction failed for {source_table}.") from None
     finally:
         if source_cursor is not None:
             source_cursor.close()
-        if owns_source_connection and source_connection is not None:
-            if not source_connection.autocommit:
-                source_connection.commit()
-            source_connection.close()
         target_connection.close()
 
 
 def load_consistent_snapshot(**context: Any) -> list[dict[str, int | str]]:
     """Extract every source table through one SQL Server snapshot transaction."""
-    results: list[dict[str, int | str]] = []
-    connection = pyodbc.connect(
-        _sqlserver_connection_string(),
-        autocommit=False,
-    )
+    run_id = _run_id_from_context(context)
+    staging = _staging_connection()
     try:
+        with staging.cursor() as cursor:
+            cursor.execute(
+                "SELECT 1 FROM metadata.extraction_batches WHERE run_id = %s LIMIT 1",
+                (run_id,),
+            )
+            if cursor.fetchone() is not None:
+                raise AirflowException("Start a new snapshot run to retry extraction.")
+    finally:
+        staging.close()
+    results: list[dict[str, int | str]] = []
+    connection = None
+    try:
+        connection = pyodbc.connect(_sqlserver_connection_string(), autocommit=False)
         with connection.cursor() as cursor:
             cursor.execute(
                 f"SET TRANSACTION ISOLATION LEVEL "
@@ -357,37 +369,60 @@ def load_consistent_snapshot(**context: Any) -> list[dict[str, int | str]]:
             )
         connection.commit()
         return results
-    except Exception:
-        connection.rollback()
-        raise
+    except Exception as error:
+        if connection is not None:
+            connection.rollback()
+        LOGGER.error("Snapshot run %s failed (%s).", run_id, type(error).__name__)
+        raise AirflowException(f"Snapshot run {run_id} failed.") from None
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
 
 
-def finish_pipeline_run(**context: Any) -> None:
+def finish_pipeline_run(**context: Any) -> int:
     """Set the overall run status after every table task has finished."""
     run_id = _run_id_from_context(context)
+    results = context["ti"].xcom_pull(task_ids="load_consistent_snapshot")
+    # The extractor returns its manifest only after closing the source transaction.
+    manifest = {
+        (item["source_table"], item["batch_id"]) for item in (results or ())
+    }
+    expected_tables = {source_table for source_table, _ in SOURCE_TABLES}
     connection = _staging_connection()
     try:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT COUNT(*) FILTER (WHERE status = 'SUCCESS'), COUNT(*)
+                SELECT source_table, batch_id, status,
+                       source_rows_expected = extracted_rows
+                       AND source_rows_expected = inserted_rows AS reconciled
                 FROM metadata.extraction_batches
                 WHERE run_id = %s
                 """,
                 (run_id,),
             )
-            successful_batches, recorded_batches = cursor.fetchone()
+            rows = cursor.fetchall()
+            recorded_batches = len(rows)
+            verified = {
+                (table, batch_id)
+                for table, batch_id, status, reconciled in rows
+                if status == "SUCCESS" and reconciled
+            }
+            successful_batches = len(verified)
 
-            if successful_batches == len(SOURCE_TABLES):
+            if (
+                recorded_batches == len(expected_tables)
+                and manifest == verified
+                and {table for table, _ in verified} == expected_tables
+            ):
                 status = "SUCCESS"
                 error_message = None
             elif successful_batches:
                 status = "PARTIAL"
                 error_message = (
                     f"{successful_batches} of {len(SOURCE_TABLES)} table loads "
-                    f"succeeded; {recorded_batches} batches were recorded."
+                    f"reconciled; {recorded_batches} recorded. "
+                    "The extraction completion manifest is missing or invalid."
                 )
             else:
                 status = "FAILED"
@@ -402,7 +437,7 @@ def finish_pipeline_run(**context: Any) -> None:
                 SET status = %s,
                     completed_at = CURRENT_TIMESTAMP,
                     error_message = %s
-                WHERE run_id = %s
+                WHERE run_id = %s AND status <> 'SUCCESS'
                 """,
                 (status, error_message, run_id),
             )
@@ -413,7 +448,6 @@ def finish_pipeline_run(**context: Any) -> None:
             status,
             successful_batches,
             len(SOURCE_TABLES),
-        
         )
 
         if status != "SUCCESS":
@@ -421,5 +455,6 @@ def finish_pipeline_run(**context: Any) -> None:
                 error_message
                 or f"Pipeline run_id={run_id} finished with status={status}."
             )
+        return run_id
     finally:
         connection.close()
