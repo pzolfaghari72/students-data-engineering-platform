@@ -8,7 +8,7 @@ test -n "$$container" && status=$$(docker wait "$$container") && \
 { test "$$status" = 0 || { printf '%s exited with status %s\n' '$(2)' "$$status" >&2; exit 1; }; }
 endef
 
-.PHONY: init install compose-config up up-core up-batch up-pipeline cdc-up streaming-up dashboards-up status logs test warehouse-load reconcile down
+.PHONY: init install compose-config up up-core up-batch up-pipeline cdc-up streaming-up dashboards-up status logs test warehouse-load reconcile incremental-install incremental-bootstrap incremental-verify incremental-test down
 
 init:
 	bash scripts/initialize_project.sh
@@ -54,6 +54,25 @@ warehouse-load:
 
 reconcile:
 	docker compose exec -T clickhouse sh -ec 'clickhouse-client --port "$$CLICKHOUSE_NATIVE_PORT" --user "$$CLICKHOUSE_ADMIN_USER" --password "$$CLICKHOUSE_ADMIN_PASSWORD" --database "$$WAREHOUSE_DB_NAME" --param_cdc_db="$${CDC_DB_NAME:-students_cdc}"' < db/warehouse_clickhouse/reconcile.sql
+
+incremental-install:
+	docker compose exec -T airflow-scheduler python3 /opt/spark-apps/incremental_warehouse.py --install < db/staging_postgres/staging_ddl/incremental_cdc.sql
+
+incremental-bootstrap:
+	docker compose exec -T airflow-scheduler python3 /opt/spark-apps/incremental_warehouse.py --bootstrap
+
+incremental-verify:
+	docker compose exec -T airflow-scheduler python3 /opt/spark-apps/incremental_warehouse.py --verify
+
+incremental-test:
+	tar -cf - spark/*.py airflow/dags/students_staging/*.py \
+		db/staging_postgres/staging_ddl/incremental_cdc.sql db/warehouse_clickhouse/cdc_warehouse_ddl.sql \
+		grafana/dashboards/enrollment-performance.json scripts/render_incremental_dashboard.py \
+		tests/integration/incremental_warehouse.py | docker compose exec -T airflow-scheduler sh -ec '\
+		fixture_dir=$$(mktemp -d); \
+		trap "rm -rf -- \"$$fixture_dir\"" EXIT; \
+		tar -xf - -C "$$fixture_dir"; \
+		python3 "$$fixture_dir/tests/integration/incremental_warehouse.py"'
 
 status:
 	docker compose --profile cdc --profile streaming ps

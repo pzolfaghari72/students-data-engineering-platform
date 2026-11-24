@@ -9,6 +9,17 @@
 | Airflow parsing | `docker compose exec -T airflow-scheduler airflow dags list-import-errors --output json` reads persisted import errors. Add `--local` to parse the mounted files. |
 | Published data | Use `make reconcile` after both products publish. Read `batch_publication_status` and `cdc_pipeline_health` to verify the selected run and generation. |
 | Grafana | Verify both datasource health checks and run the panel queries. CDC operation panels need an active generation with live events to return event rows. |
+| Incremental model | `make incremental-test` exercises the PostgreSQL relay, actual Spark projection, ClickHouse publication, SCD Type 2 views, and all 18 analytical SQL queries against isolated synthetic data. |
+
+## Incremental validation
+
+The integration fixture checks the baseline and subsequent inserts, updates and deletes. It also covers one logical event delivered at two Kafka offsets, a late change that revises an earlier SCD interval, an unchanged analytical projection, a reference edit that changes existing facts, and deletion and reactivation of a dimension. A candidate abandoned after a ClickHouse write stays invisible. The next run reuses PostgreSQL history, and a lost publication receipt is recovered from the warehouse marker. The fixture exercises both All and selected term and department filters.
+
+A read-only check of the running deployment validated batch seals 0–2321 and sampled CDC key and projected field shapes for all 15 source tables. Batch run 2 and active CDC both reported 600,000 applications and 59,279 offerings. CDC reported 3,724,655 enrollment attempts, one more than Batch run 2, consistent with the verified insert after the Batch snapshot. These are different source cuts. [Incremental activation and same-cut verification](../04-data-pipelines/incremental.md#activation-on-an-existing-volume)
+
+## Dashboard cutover on 24 November 2026
+
+The full-size incremental bootstrap published sealed CDC batch 2321. Same-cut verification returned 3,724,655 enrollment attempts, 119,464 unique enrolled students, 59,279 offerings, 4,191,895 offered seats and 600,000 applications. All 18 panels on each analytical dashboard returned rows with both filters on All. Grafana Home resolved to **Incremental CDC— Student Enrollment, Capacity & Grades**, and the scheduled incremental DAG run that began at 16:00 Tehran time succeeded. [Current dashboard captures](../assets/README.md#grafana-dashboards) · [Dashboard guide](grafana.md)
 
 ## Integration fixtures
 

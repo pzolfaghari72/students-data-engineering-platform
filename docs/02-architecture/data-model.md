@@ -1,6 +1,6 @@
 # Database models across the pipelines
 
-The [SQL Server DDL and assessment](../../db/source_assessment) describe the upstream contract. The staging and batch diagrams below use the modeled tables and keys in this repository. The streaming diagram follows how ClickHouse publishes verified events.
+The [SQL Server DDL and assessment](../../db/source_assessment) describe the upstream contract. The staging and warehouse diagrams show how keys are carried into each model. [Database roles and end-to-end flows](overview.md)
 
 ## SQL Server source
 
@@ -84,3 +84,7 @@ flowchart TD
 ```
 
 Transport records are identified within a generation by Kafka topic, partition and offset. Logical event identity includes the source table, canonical source key, operation and source version. The current-state grain is one latest nondeleted row per source table and key. The published KPI views aggregate those rows. See the [CDC warehouse design](../05-data-platform/warehouse.md#cdc-event-and-current-state-model) and [CDC DDL](../../db/warehouse_clickhouse/cdc_warehouse_ddl.sql).
+
+## ClickHouse incremental analytics
+
+The incremental warehouse reuses the fact grains and dimension keys in the Batch diagram. Its physical `inc_source_*` tables store a typed baseline and later changes, grouped by CDC generation and incremental load ID. Each successful `incremental_publications` marker identifies the latest verified CDC batch included in the warehouse. Published fact views combine the current source keys with current lookup values. Historical dimension views track when attributes take effect and change. This gives the reporting dashboard the familiar analytical shape with a publication that advances through verified CDC changes. [Incremental warehouse](../04-data-pipelines/incremental.md) · [SCD Type 2 history](../05-data-platform/scd-type-2.md)

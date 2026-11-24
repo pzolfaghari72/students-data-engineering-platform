@@ -24,6 +24,10 @@ Unpause both Batch DAGs and trigger `sqlserver_to_postgres_staging`. Track the v
 
 A failed extraction requires a fresh staging run. A failed warehouse load can retry the same successful staging input with `make warehouse-load RUN_ID=123`, using its actual ID. During upgrades, apply the existing staging initializer if the DAG reports outdated metadata. Keep the raw batches needed by current and recent publications. [Batch failure handling](../04-data-pipelines/batch.md#operation-and-failure-handling)
 
+## Incremental warehouse
+
+Use the [explicit bootstrap and dashboard cutover procedure](../04-data-pipelines/incremental.md#activation-on-an-existing-volume) on an existing installation. The new DAG is `postgres_to_clickhouse_incremental`. After activation it runs every 15 minutes. Track the published CDC batch in `incremental_publication_status` and errors or elapsed time in PostgreSQL `incremental_cdc.runs`. Retain an independent Batch snapshot for reconciliation and recovery.
+
 ## Monitor and recover CDC
 
 The DBA verifies capture and cleanup jobs, retention and permissions. The read-only readiness SQL takes the source schema and connector login as parameters. Run it in the source database with `sqlcmd -b -d <database> -v SourceSchema=<schema> ConnectorLogin=<login> -i <script>`. Run any source enablement only with the source owner's authorization. [Readiness SQL](../../db/source_assessment/sqlserver_cdc_prerequisites.sql) · [Source requirements](../05-data-platform/source-and-staging.md#cdc-capture-prerequisites)

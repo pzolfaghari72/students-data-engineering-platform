@@ -1,6 +1,6 @@
 # CDC streaming pipeline
 
-SQL Server CDC records committed table changes through capture instances backed by transaction log processing. Debezium supplies an initial snapshot and a change event stream. Connect manages the connector task, source offsets, status and schema history. The Kafka log allows Spark to process independently of connector polling and replay retained records. PostgreSQL serves batch staging and has no CDC sink responsibilities.
+SQL Server CDC records committed table changes through capture instances backed by transaction log processing. Debezium supplies an initial snapshot and a change event stream. Connect manages the connector task, source offsets, status and schema history. The Kafka log allows Spark to process independently of connector polling and replay retained records. An independent incremental job relays sealed ClickHouse events to PostgreSQL for analytical publication. [Incremental relay](incremental.md)
 
 ```mermaid
 sequenceDiagram

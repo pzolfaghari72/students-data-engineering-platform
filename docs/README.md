@@ -5,13 +5,13 @@ Read the sections in order for a learning path, or start with the part of the sy
 | Section | Guides |
 |---|---|
 | 01 · Foundation | [Data engineering concepts and reading path](01-foundation/data-engineering.md) |
-| 02 · Architecture | [System architecture and flows](02-architecture/overview.md), [database models and ERDs](02-architecture/data-model.md), [engineering decisions and evolution](02-architecture/decisions.md) |
+| 02 · Architecture | [Why the three dashboards exist, database roles and end-to-end flows](02-architecture/overview.md), [database models and ERDs](02-architecture/data-model.md), [engineering decisions and evolution](02-architecture/decisions.md) |
 | 03 · Infrastructure | [Local setup and environment](03-infrastructure/setup.md), [Compose services, network and persistent state](03-infrastructure/services.md) |
-| 04 · Data pipelines | [Batch snapshots](04-data-pipelines/batch.md), [CDC streaming](04-data-pipelines/cdc.md), [publication and reconciliation](04-data-pipelines/reconciliation.md) |
-| 05 · Data platform | [SQL Server source and PostgreSQL staging](05-data-platform/source-and-staging.md), [ClickHouse analytics and dimensional model](05-data-platform/warehouse.md) |
-| 06 · Observability and quality | [Grafana and metrics](06-observability-and-quality/grafana.md), [testing and implementation evidence](06-observability-and-quality/testing-and-validation.md) |
+| 04 · Data pipelines | [Batch snapshots](04-data-pipelines/batch.md), [CDC streaming](04-data-pipelines/cdc.md), [incremental analytics](04-data-pipelines/incremental.md), [publication and reconciliation](04-data-pipelines/reconciliation.md) |
+| 05 · Data platform | [SQL Server source and PostgreSQL staging](05-data-platform/source-and-staging.md), [ClickHouse analytics and dimensional model](05-data-platform/warehouse.md), [SCD Type 2 history](05-data-platform/scd-type-2.md) |
+| 06 · Observability and quality | [Grafana dashboards and metric definitions](06-observability-and-quality/grafana.md), [testing and implementation evidence](06-observability-and-quality/testing-and-validation.md) |
 | 07 · Operations | [Operational runbook](07-operations/runbook.md) |
-| Visual assets and evidence | [Visual gallery](assets/README.md), earlier validation at `55843c3:docs/assets/validation-2026-11-21.md` |
+| Visual assets and evidence | [Current Grafana screenshots](assets/README.md#grafana-dashboards), [visual gallery](assets/README.md), earlier validation at `55843c3:docs/assets/validation-2026-11-21.md` |
 
 The [project README](../README.md) is the entry point for local execution. The [project status](06-observability-and-quality/testing-and-validation.md#implementation-status) records dated observations and the remaining end-to-end checks.
 

@@ -2,6 +2,8 @@
 
 Batch establishes one independently validated analytical cut of 15 SQL Server tables. It supports wide joins by academic term, department and grade, gives recovery a repeatable input, and provides a comparison boundary for live CDC.
 
+The existing Batch DAGs remain available for on-demand rebuilds and reconciliation. After cutover, routine analytical freshness comes from the incremental publisher. Leave `BATCH_SNAPSHOT_SCHEDULE` blank for on-demand Batch runs. [Incremental publication](incremental.md)
+
 ```mermaid
 sequenceDiagram
     participant A as Airflow snapshot DAG

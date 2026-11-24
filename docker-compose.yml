@@ -70,6 +70,7 @@ x-airflow-common: &airflow-common
     WAREHOUSE_HOST: ${CLICKHOUSE_HOST:?Set CLICKHOUSE_HOST}
     WAREHOUSE_HTTP_PORT: ${CLICKHOUSE_HTTP_PORT:?Set CLICKHOUSE_HTTP_PORT}
     WAREHOUSE_DB_NAME: ${WAREHOUSE_DB_NAME:?Set WAREHOUSE_DB_NAME}
+    CDC_DB_NAME: ${CDC_DB_NAME:-students_cdc}
     STUDENT_ID_HMAC_KEY: ${STUDENT_ID_HMAC_KEY:-}
     BATCH_SNAPSHOT_SCHEDULE: ${BATCH_SNAPSHOT_SCHEDULE:-}
     SPARK_BATCH_MASTER: ${SPARK_BATCH_MASTER:-local[2]}
@@ -186,6 +187,8 @@ services:
           -f /staging_ddl/metadata_schema.sql
         psql -v ON_ERROR_STOP=1 -h "$$STAGING_DB_HOST" -p "$$STAGING_DB_PORT" -U "$$STAGING_DB_USER" -d "$$STAGING_DB_NAME" \
           -f /staging_ddl/raw_tables.sql
+        psql -v ON_ERROR_STOP=1 -h "$$STAGING_DB_HOST" -p "$$STAGING_DB_PORT" -U "$$STAGING_DB_USER" -d "$$STAGING_DB_NAME" \
+          -f /staging_ddl/incremental_cdc.sql
 
     networks: [platform]
 

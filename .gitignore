@@ -19,6 +19,9 @@ htmlcov/
 # Airflow runtime logs
 airflow/logs/
 
+# Locally rendered incremental Grafana dashboard
+grafana/dashboards/enrollment-incremental.json
+
 # Spark and JVM runtime artifacts
 spark-warehouse/
 metastore_db/

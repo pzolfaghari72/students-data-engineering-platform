@@ -51,9 +51,88 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "noValue": "No published data"
+          "noValue": "No published data",
+          "unit": "locale",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "enrollments"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Enrollments"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "offerings"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Course offerings"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "applications"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Applications"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "students"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Students"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "offered_seats"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Offered seats"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "graded_enrollments"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Graded enrollments"
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "reduceOptions": {
@@ -63,51 +142,18 @@
           "fields": "",
           "values": false
         },
-        "colorMode": "none"
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "wideLayout": false
       },
       "description": "Latest verified CDC generation. Counts reflect source rows, including repeated student-course enrollment attempts."
     },
     {
-      "id": 2,
-      "title": "CDC progress and freshness",
-      "type": "table",
-      "datasource": {
-        "type": "grafana-clickhouse-datasource",
-        "uid": "students-cdc"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 6,
-        "w": 24,
-        "h": 6
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "grafana-clickhouse-datasource",
-            "uid": "students-cdc"
-          },
-          "rawSql": "SELECT generation_id, active_generation, status, last_verified_at,\n    if(bootstrap_records = 0 AND status = 'ACTIVE', 100, round(100 * verified_bootstrap_records / greatest(bootstrap_records, 1), 1)) AS bootstrap_percent,\n    offsets_behind_at_last_batch, last_live_processing_delay_ms\n    FROM cdc_pipeline_health",
-          "queryType": "table",
-          "format": 1,
-          "editorType": "sql"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "noValue": "No published data"
-        },
-        "overrides": []
-      },
-      "options": {
-        "showHeader": true
-      },
-      "description": "Lag is sampled when Spark seals a batch. During source inactivity, verify the Spark query and Connect task with the runbook."
-    },
-    {
       "id": 4,
-      "title": "Live CDC Events — INSERT / UPDATE / DELETE",
+      "title": "Live CDC Events",
       "type": "stat",
       "datasource": {
         "type": "grafana-clickhouse-datasource",
@@ -115,7 +161,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 12,
+        "y": 6,
         "w": 24,
         "h": 5
       },
@@ -134,7 +180,9 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "noValue": "No active CDC publication"
+          "noValue": "No active CDC publication",
+          "unit": "locale",
+          "decimals": 0
         },
         "overrides": [
           {
@@ -143,6 +191,10 @@
               "options": "INSERT"
             },
             "properties": [
+              {
+                "id": "displayName",
+                "value": "Insert"
+              },
               {
                 "id": "color",
                 "value": {
@@ -159,6 +211,10 @@
             },
             "properties": [
               {
+                "id": "displayName",
+                "value": "Update"
+              },
+              {
                 "id": "color",
                 "value": {
                   "mode": "fixed",
@@ -173,6 +229,10 @@
               "options": "DELETE"
             },
             "properties": [
+              {
+                "id": "displayName",
+                "value": "Delete"
+              },
               {
                 "id": "color",
                 "value": {
@@ -191,6 +251,13 @@
               {
                 "id": "decimals",
                 "value": 2
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
               }
             ]
           }
@@ -204,11 +271,223 @@
           "fields": "",
           "values": false
         },
-        "colorMode": "value",
+        "colorMode": "background",
         "graphMode": "none",
-        "orientation": "horizontal"
+        "orientation": "auto",
+        "justifyMode": "center",
+        "textMode": "value_and_name",
+        "wideLayout": false
       },
       "description": "Verified changes first processed during the selected time range. The rate is the average per minute across that range."
+    },
+    {
+      "id": 2,
+      "title": "CDC progress and freshness",
+      "type": "table",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "students-cdc"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 11,
+        "w": 24,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "students-cdc"
+          },
+          "rawSql": "SELECT generation_id, active_generation, status, last_verified_at,\n    if(bootstrap_records = 0 AND status = 'ACTIVE', 100, round(100 * verified_bootstrap_records / greatest(bootstrap_records, 1), 1)) AS bootstrap_percent,\n    offsets_behind_at_last_batch, last_live_processing_delay_ms\n    FROM cdc_pipeline_health",
+          "queryType": "table",
+          "format": 1,
+          "editorType": "sql"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "—",
+          "custom": {
+            "minWidth": 100
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "generation_id"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Generation"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "active_generation"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Active generation"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "status"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Status"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "ACTIVE": {
+                        "text": "Active",
+                        "color": "green",
+                        "index": 0
+                      },
+                      "BOOTSTRAPPING": {
+                        "text": "Bootstrapping",
+                        "color": "orange",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "last_verified_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Last verified"
+              },
+              {
+                "id": "custom.minWidth",
+                "value": 155
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "bootstrap_percent"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Bootstrap"
+              },
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 1
+              },
+              {
+                "id": "min",
+                "value": 0
+              },
+              {
+                "id": "max",
+                "value": 100
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "blue",
+                      "value": null
+                    },
+                    {
+                      "color": "green",
+                      "value": 100
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "gauge",
+                  "mode": "basic",
+                  "valueDisplayMode": "text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "offsets_behind_at_last_batch"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Offsets behind"
+              },
+              {
+                "id": "unit",
+                "value": "locale"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "last_live_processing_delay_ms"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Last live delay"
+              },
+              {
+                "id": "unit",
+                "value": "ms"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "md"
+      },
+      "description": "Lag is sampled when Spark seals a batch. During source inactivity, verify the Spark query and Connect task with the runbook."
     },
     {
       "id": 5,
@@ -220,9 +499,9 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 17,
-        "w": 24,
-        "h": 9
+        "y": 15,
+        "w": 10,
+        "h": 11
       },
       "targets": [
         {
@@ -244,12 +523,16 @@
           "noValue": "No verified changes in this time range",
           "custom": {
             "drawStyle": "bars",
-            "fillOpacity": 72,
+            "fillOpacity": 85,
             "stacking": {
               "mode": "normal",
               "group": "A"
-            }
-          }
+            },
+            "axisLabel": "Events",
+            "barAlignment": 0,
+            "lineWidth": 0
+          },
+          "unit": "locale"
         },
         "overrides": [
           {
@@ -258,6 +541,10 @@
               "options": "INSERT"
             },
             "properties": [
+              {
+                "id": "displayName",
+                "value": "Insert"
+              },
               {
                 "id": "color",
                 "value": {
@@ -274,6 +561,10 @@
             },
             "properties": [
               {
+                "id": "displayName",
+                "value": "Update"
+              },
+              {
                 "id": "color",
                 "value": {
                   "mode": "fixed",
@@ -288,6 +579,10 @@
               "options": "DELETE"
             },
             "properties": [
+              {
+                "id": "displayName",
+                "value": "Delete"
+              },
               {
                 "id": "color",
                 "value": {
@@ -324,10 +619,10 @@
         "uid": "students-cdc"
       },
       "gridPos": {
-        "x": 0,
-        "y": 26,
-        "w": 24,
-        "h": 9
+        "x": 10,
+        "y": 15,
+        "w": 14,
+        "h": 11
       },
       "targets": [
         {
@@ -344,12 +639,124 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "noValue": "—"
+          "noValue": "—",
+          "custom": {
+            "minWidth": 90
+          }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Event Timestamp"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Event time"
+              },
+              {
+                "id": "custom.minWidth",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Table Name"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Source table"
+              },
+              {
+                "id": "custom.minWidth",
+                "value": 115
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Operation"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "INSERT": {
+                        "text": "Insert",
+                        "color": "green",
+                        "index": 0
+                      },
+                      "UPDATE": {
+                        "text": "Update",
+                        "color": "blue",
+                        "index": 1
+                      },
+                      "DELETE": {
+                        "text": "Delete",
+                        "color": "red",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.align",
+                "value": "center"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Primary Key"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Primary key"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Processing Timestamp"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Processed at"
+              },
+              {
+                "id": "custom.minWidth",
+                "value": 150
+              }
+            ]
+          }
+        ]
       },
       "options": {
-        "showHeader": true
+        "showHeader": true,
+        "footer": {
+          "show": false,
+          "reducer": [],
+          "enablePagination": true
+        }
       },
       "description": "Most recent 25 verified changes in the active generation. Keys for people-related tables are hidden. The event timestamp comes from stored Debezium metadata and can be unavailable."
     },
@@ -363,9 +770,9 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 35,
-        "w": 24,
-        "h": 5
+        "y": 26,
+        "w": 12,
+        "h": 4
       },
       "targets": [
         {
@@ -382,15 +789,58 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "noValue": "—"
+          "noValue": "—",
+          "custom": {
+            "minWidth": 100
+          }
         },
         "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Total processed live events"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Processed events"
+              },
+              {
+                "id": "unit",
+                "value": "locale"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last processed event timestamp"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Last processed"
+              },
+              {
+                "id": "custom.minWidth",
+                "value": 155
+              }
+            ]
+          },
           {
             "matcher": {
               "id": "byName",
               "options": "Latest event-to-seal delay"
             },
             "properties": [
+              {
+                "id": "displayName",
+                "value": "Event-to-seal delay"
+              },
               {
                 "id": "unit",
                 "value": "ms"
@@ -400,7 +850,8 @@
         ]
       },
       "options": {
-        "showHeader": true
+        "showHeader": true,
+        "cellHeight": "md"
       },
       "description": "Lifetime metrics for verified live changes in the active generation. Delay compares the stored Debezium event time with the first Spark batch seal. Sampled Kafka backlog is shown under CDC progress and freshness."
     },
@@ -413,10 +864,10 @@
         "uid": "students-warehouse"
       },
       "gridPos": {
-        "x": 0,
-        "y": 40,
-        "w": 24,
-        "h": 5
+        "x": 12,
+        "y": 26,
+        "w": 12,
+        "h": 4
       },
       "targets": [
         {
@@ -433,12 +884,69 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "noValue": "No published data"
+          "noValue": "—",
+          "custom": {
+            "minWidth": 85
+          }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "source_run_id"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Run ID"
+              },
+              {
+                "id": "unit",
+                "value": "none"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "snapshot_started_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Snapshot started"
+              },
+              {
+                "id": "custom.minWidth",
+                "value": 155
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "completed_at"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Published at"
+              },
+              {
+                "id": "custom.minWidth",
+                "value": 155
+              }
+            ]
+          }
+        ]
       },
       "options": {
-        "showHeader": true
+        "showHeader": true,
+        "cellHeight": "md"
       }
     }
   ]
